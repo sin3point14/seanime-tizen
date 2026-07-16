@@ -1,15 +1,13 @@
 import { parseAvPlayTracks } from "../domain/tracks"
-import type { BufferPolicy } from "../domain/settings"
+import type { PlayerSettings } from "../domain/settings"
 import type { TrackDescriptor, TrackType } from "../domain/types"
+import type { PlaybackEngine, PlaybackEngineEvent } from "./playback-engine"
 
-export type AvPlayEvent =
-  | { type: "buffering"; percent: number }
-  | { type: "time"; milliseconds: number }
-  | { type: "complete" }
-  | { type: "error"; message: string }
-  | { type: "subtitle"; text: string; duration: number }
+export type AvPlayEvent = PlaybackEngineEvent
 
-export class AvPlayAdapter {
+export class AvPlayAdapter implements PlaybackEngine {
+  readonly name = "Samsung AVPlay" as const
+  readonly exactBufferedRanges = false
   private avplay: SamsungAVPlay
   private listeners = new Set<(event: AvPlayEvent) => void>()
   private opened = false
@@ -32,21 +30,20 @@ export class AvPlayAdapter {
   subscribe(listener: (event: AvPlayEvent) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   private emit(event: AvPlayEvent) { this.listeners.forEach(listener => listener(event)) }
 
-  load(url: string, bufferPolicy: BufferPolicy = "stable") {
+  load(url: string, settings: PlayerSettings) {
     if (this.opened) this.stop()
     this.avplay.open(url)
-    this.configureBuffering(bufferPolicy)
+    this.configureBuffering(settings)
     this.avplay.setDisplayRect(0, 0, 1920, 1080)
     this.avplay.setDisplayMethod("PLAYER_DISPLAY_MODE_FULL_SCREEN")
     this.opened = true
   }
-  private configureBuffering(policy: BufferPolicy) {
+  private configureBuffering(settings: PlayerSettings) {
     // AVPlay owns this transient buffer; this is not a persistent file cache.
     // These must be set in IDLE, after open() and before prepareAsync().
-    const amounts = policy === "fast" ? { play: 3, resume: 8 } : policy === "balanced" ? { play: 8, resume: 15 } : { play: 15, resume: 30 }
-    try { this.avplay.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", amounts.play) } catch { /* Older firmware may use its default. */ }
-    try { this.avplay.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", amounts.resume) } catch { /* Older firmware may use its default. */ }
-    try { this.avplay.setTimeoutForBuffering(30) } catch { /* Preserve firmware default if unsupported. */ }
+    try { this.avplay.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", settings.avplayInitialBufferSeconds) } catch { /* Older firmware may use its default. */ }
+    try { this.avplay.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", settings.avplayRecoveryBufferSeconds) } catch { /* Older firmware may use its default. */ }
+    try { this.avplay.setTimeoutForBuffering(settings.avplayBufferTimeoutSeconds) } catch { /* Preserve firmware default if unsupported. */ }
   }
   prepare() { return new Promise<void>((resolve, reject) => this.avplay.prepareAsync(resolve, error => reject(new Error(friendlyAvPlayError(String(error)))))) }
   play() { this.avplay.play() }
@@ -79,6 +76,7 @@ export class AvPlayAdapter {
       return Number.isFinite(value) && value > 0 ? value : null
     } catch { return null }
   }
+  getBufferedRanges() { return [] }
   selectTrack(type: TrackType, index: number) { this.avplay.setSelectTrack(type, index) }
   setSubtitlesEnabled(enabled: boolean) { this.avplay.setSilentSubtitle(!enabled) }
 }

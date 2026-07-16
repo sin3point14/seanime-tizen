@@ -1,13 +1,15 @@
 {
   "name": "seanime-tizen",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "wasm:check": "powershell -ExecutionPolicy Bypass -File scripts/check-wasm-sdk.ps1",
+    "wasm:build": "powershell -ExecutionPolicy Bypass -File scripts/build-wasm-player.ps1",
     "tizen:build": "powershell -ExecutionPolicy Bypass -File scripts/tizen.ps1 build",
     "tizen:package": "powershell -ExecutionPolicy Bypass -File scripts/tizen.ps1 package",
     "tizen:install": "powershell -ExecutionPolicy Bypass -File scripts/tizen.ps1 install",
@@ -17,6 +19,7 @@
   "dependencies": {
     "@noriginmedia/norigin-spatial-navigation": "^3.2.1",
     "crypto-js": "^4.2.0",
+    "jassub": "2.5.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -26,10 +29,10 @@
     "@types/crypto-js": "^4.2.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "5.2.0",
     "jsdom": "^25.0.1",
     "typescript": "~5.7.2",
-    "vite": "^6.0.5",
-    "vitest": "^2.1.8"
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
   }
 }

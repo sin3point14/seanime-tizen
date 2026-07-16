@@ -4,5 +4,6 @@ import react from "@vitejs/plugin-react"
 export default defineConfig({
   base: "./",
   plugins: [react()],
+  worker: { format: "es" },
   build: { target: "es2017", outDir: "dist", emptyOutDir: true },
 })

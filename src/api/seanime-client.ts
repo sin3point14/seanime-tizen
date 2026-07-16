@@ -75,6 +75,13 @@ export class SeanimeClient {
     return this.requestText(`/api/v1/mediastream/subs/${link.replace(/^\/+/, "")}`)
   }
 
+  async getExtractedAttachment(name: string) {
+    const response = await fetch(`${normalizeUrl(this.config.url)}/api/v1/mediastream/att/${encodeURIComponent(name)}`, { headers: this.headers() })
+    this.captureIdentity(response.headers)
+    if (!response.ok) throw new SeanimeError(`Could not load subtitle font (${response.status})`, response.status)
+    return new Uint8Array(await response.arrayBuffer())
+  }
+
   async measureMediaSpeed(url: string, sampleBytes = 4 * 1024 * 1024) {
     const controller = new AbortController()
     const started = performance.now()

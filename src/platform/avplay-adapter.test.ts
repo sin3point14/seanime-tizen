@@ -1,4 +1,5 @@
 import { AvPlayAdapter } from "./avplay-adapter"
+import { DEFAULT_SETTINGS } from "../domain/settings"
 
 function mockAvPlay() {
   let listener: AVPlayListener = {}
@@ -13,7 +14,7 @@ function mockAvPlay() {
 it("wraps AVPlay state, tracks, seeking, and events", async () => {
   const avplay = mockAvPlay(); const adapter = new AvPlayAdapter(avplay)
   const events: string[] = []; adapter.subscribe(event => events.push(event.type))
-  adapter.load("http://video"); await adapter.prepare(); adapter.play(); adapter.seekBy(-10_000); avplay.emitTime(); avplay.emitComplete()
+  adapter.load("http://video", DEFAULT_SETTINGS); await adapter.prepare(); adapter.play(); adapter.seekBy(-10_000); avplay.emitTime(); avplay.emitComplete()
   expect(avplay.open).toHaveBeenCalledWith("http://video")
   expect(avplay.setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 15)
   expect(avplay.setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 30)
@@ -29,11 +30,12 @@ it("exposes AVPlay bandwidth when the firmware provides it", () => {
   expect(adapter.getBandwidthBitsPerSecond()).toBe(12_000_000)
 })
 
-it("applies the selected buffer policy before prepare", () => {
+it("applies manual buffering thresholds before prepare", () => {
   const avplay = mockAvPlay(); const adapter = new AvPlayAdapter(avplay)
-  adapter.load("http://video", "fast")
-  expect(avplay.setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 3)
+  adapter.load("http://video", { ...DEFAULT_SETTINGS, avplayInitialBufferSeconds: 4, avplayRecoveryBufferSeconds: 8, avplayBufferTimeoutSeconds: 9 })
+  expect(avplay.setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 4)
   expect(avplay.setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 8)
+  expect(avplay.setTimeoutForBuffering).toHaveBeenCalledWith(9)
 })
 
 it("waits for AVPlay to enter the requested lifecycle state", async () => {

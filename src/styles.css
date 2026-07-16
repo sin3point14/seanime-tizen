@@ -49,3 +49,35 @@ h1 { font-size: 58px; line-height: 1.06; margin: 10px 0 14px; } h2 { font-size: 
 .modal-backdrop { position: absolute; z-index: 10; inset: 0; background: rgba(0,0,0,.55); display: flex; justify-content: flex-end; }.track-panel { width: 520px; height: 100%; overflow-y: auto; background: #15151d; padding: 45px 35px; display: flex; flex-direction: column; gap: 10px; }.track-panel .focusable { display: flex; flex-direction: column; }.track-panel small { color: var(--muted); font-size: 15px; margin-top: 5px; }.modal-close { margin-top: 20px; }
 .diagnostics-panel dl { margin: 0 0 22px; }.diagnostics-panel dl > div { padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.08); }.diagnostics-panel dt { color: var(--muted); font-size: 14px; }.diagnostics-panel dd { margin: 5px 0 0; font-size: 18px; overflow-wrap: anywhere; }.diagnostics-panel .focusable { width: 100%; }
 @media (max-width: 1400px) { body { font-size: 19px; }.topbar { height: 84px; padding: 14px 45px; }main { height: calc(100% - 84px); }.screen { padding: 35px 45px; }.poster { height: 260px; }.media-card { width: 190px; min-width: 190px; }.search-layout { grid-template-columns: 600px 1fr; }.keyboard .key { width: 55px; }.episodes { margin-top: 40px; } }
+
+/* TV performance and strict grid containment. */
+.media-card,.continue-card,.episode-tile { contain: layout paint style; }
+.episode-tile { content-visibility: auto; contain-intrinsic-size: auto 112px; }
+.episode-grid { width: 100%; max-width: 100%; overflow: hidden; }
+.episode-tile > span:nth-child(2),.episode-tile strong,.episode-tile small { width: 100%; max-width: 100%; min-width: 0; }
+
+/* Advanced settings. */
+.choice-row { flex-wrap: wrap; }
+.setting-block,.server-card,.about,.cache-summary,.resource-summary { border-radius: 12px; background: rgba(255,255,255,.06); padding: 20px; }
+.choice-row .selected,.appearance-panel .selected { background: var(--accent); }
+.cache-summary,.resource-summary { display: flex; flex-direction: column; gap: 8px; }
+.cache-summary small,.resource-summary small { color: var(--muted); }
+.setting-explanation { margin: -6px 0 4px; font-size: 16px; line-height: 1.45; }
+.numeric-setting { display: flex; gap: 20px; align-items: center; justify-content: space-between; }
+.numeric-setting > span { min-width: 0; }
+.stepper { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; }
+.stepper .focusable { min-width: 58px; padding: 9px 14px; text-align: center; }
+.stepper b { min-width: 125px; text-align: center; }
+.warning { color: #ffb26f !important; }
+
+/* libass canvas and exact buffered ranges. */
+.ass-canvas { display: none; position: absolute; z-index: 4; pointer-events: none; }
+.ass-canvas.active { display: block; }
+.timeline-buffered { position: absolute; top: 0; bottom: 0; background: rgba(255,255,255,.58); }
+.timeline-fill { z-index: 1; }
+.appearance-panel { display: flex; flex-direction: column; gap: 10px; }
+.panel-stepper { padding: 15px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+.panel-stepper > div { display: flex; gap: 10px; margin-top: 10px; }
+.panel-stepper .focusable { min-width: 75px; text-align: center; }
+.panel-stepper.disabled { opacity: .5; }
+.panel-note { font-size: 16px; line-height: 1.45; margin: 0 0 8px; }

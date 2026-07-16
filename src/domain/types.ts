@@ -108,6 +108,7 @@ export interface MediaContainer {
     video?: { codec: string; mimeCodec?: string; quality: string; width: number; height: number; bitrate: number; pixFmt: string; colorSpace: string; colorTransfer: string; colorPrimaries: string }
     audios?: Array<{ index: number; title?: string; language?: string; codec: string; mimeCodec?: string; channels: number }>
     subtitles?: MediaSubtitleTrack[]
+    fonts?: string[]
   }
 }
 

@@ -71,7 +71,7 @@ export default function App() {
     if (checking) return <div className="state-screen"><div className="spinner" /><h2>Connecting to Seanime…</h2><p>{app.config?.url}</p></div>
     return <><ConnectScreen onConnected={handleConnected} />{error && initialConfig && <div className="connection-warning">Saved server unavailable: {error}</div>}</>
   }
-  if (source) return <PlayerScreen initialSource={source} client={app.client} settings={settings} onExit={() => { setSource(null); void loadLibrary() }} onSourceChange={setSource} />
+  if (source) return <PlayerScreen initialSource={source} client={app.client} settings={settings} onSettings={saveSettings} onExit={() => { setSource(null); void loadLibrary() }} onSourceChange={setSource} />
   if (!app.collection) return <div className="state-screen"><div className="spinner" /><h2>Loading your local library…</h2>{error && <><p className="error">{error}</p><button onClick={() => void loadLibrary()}>Try again</button></>}</div>
 
   return <Shell route={route} navigate={setRoute}>

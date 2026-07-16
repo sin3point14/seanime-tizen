@@ -1,17 +1,17 @@
 # Seanime TV for Samsung Tizen
 
-A remote-first, personal-sideload TV client for a Seanime server. It targets Samsung TVs with Tizen 6.0 or newer and plays server-local files directly through Samsung AVPlay.
+A remote-first Seanime client targeting 2025 Samsung televisions running Tizen 9.
 
-[![CI](https://github.com/sin3point14/seanime-tizen/actions/workflows/ci.yml/badge.svg)](https://github.com/sin3point14/seanime-tizen/actions/workflows/ci.yml)
+## Playback features
 
-## Features
+- Samsung AVPlay direct playback for locally hosted anime, including H.264/H.265 MKV when supported by the television
+- Audio/subtitle track persistence, Seanime resume and progress tracking, and automatic next episode
+- Real ASS/SSA rendering through libass/JASSUB with embedded font attachments, plus SRT/VTT fallback
+- Immediate cumulative remote seeking, manual AVPlay startup/recovery thresholds, and stream diagnostics
+- Search history and a remote-navigable settings interface
+- An opt-in FFmpeg 4.3.1/Samsung WASM Player backend with ranged reads, a bounded LRU byte cache, eligibility checks, diagnostics, and automatic AVPlay fallback
 
-- Local library, continue watching, ranked local search, details, and episode availability
-- AVPlay playback with remote media keys, seeking, audio/subtitle tracks, resume, progress sync, and auto-next
-- Persisted server, signed client identity, track preferences, and versioned player settings
-- No torrents, debrid, online streaming, downloads, manga, or library editing
-
-Direct playback depends on codecs supported by the TV. This client does not transcode or choose alternate sources.
+The experimental backend is compiled with Samsung's modified Emscripten 1.39.4.7 SDK. It is intentionally opt-in and returns to AVPlay if FFmpeg demuxing or Samsung hardware-track initialization fails. The app never displays an estimated buffered timeline; the experimental byte cache currently reports bandwidth but does not claim byte ranges as playable timeline ranges.
 
 ## Development
 
@@ -21,24 +21,25 @@ npm test
 npm run build
 ```
 
-Open the Vite development server in a desktop browser to review browsing screens. Playback intentionally reports that AVPlay is unavailable outside a Samsung TV.
-
-GitHub Actions runs the test suite and production web build for every push and pull request. Successful runs publish the `dist` directory as a short-lived workflow artifact. Signed WGT packages remain a local operation so Samsung certificate material never enters CI.
+Playback requires a Samsung TV. Browsing screens can be reviewed through Vite in a desktop browser.
 
 ## Samsung TV deployment
 
-Install the Samsung TV Extension and Samsung Certificate Extension in Tizen Studio. Create a Samsung author/distributor certificate profile containing the target TV's DUID. Keep all certificates and passwords outside this repository.
-
-With Developer Mode enabled on the TV and SDB connected:
+Install the TV and Certificate extensions in Tizen Studio and create a Samsung certificate profile containing the TV DUID. Certificate material must remain outside this repository.
 
 ```powershell
-$env:TIZEN_CERT_PROFILE = "YourSamsungProfile"
-$env:TIZEN_DEVICE = "192.168.1.38:26101" # optional SDB serial; first connected device is used otherwise
+$env:TIZEN_CERT_PROFILE = "SeanimeTV"
+$env:TIZEN_DEVICE = "TV_IP_ADDRESS:26101"
 npm run tizen:deploy
 ```
 
-Individual `tizen:build`, `tizen:package`, `tizen:install`, and `tizen:launch` commands are also available. The package script never stores certificate material in the project.
+The existing deployment script builds Vite, creates a signed WGT, installs it, and launches the application. This manifest intentionally requires Tizen 9.0.
 
-The deployment script resolves the Samsung target name from the SDB serial and creates a space-free WGT filename. Both are required by some recent Samsung TV installers even though file transfer with a serial or spaced name can appear to work.
+## Experimental native backend prerequisites
 
-At first launch, enter the LAN URL of the Seanime server and its optional password. HTTP is supported for home-network servers through the wildcard Tizen access policy.
+- Tizen Studio with the Samsung TV extensions
+- Samsung's modified Emscripten SDK 1.39.4.7
+- FFmpeg/libavformat built without GPL or nonfree components
+- Required flags: `-s ENVIRONMENT_MAY_BE_TIZEN -pthread -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=1`
+
+Run `npm run wasm:build` to rebuild the native artifacts. The current implementation uses synchronous ranged browser fetches from a demux pthread, FFmpeg custom AVIO, a bounded hot-RAM LRU cache, a three-second Samsung packet queue, and Elementary Media Stream Source hardware decoding. A persistent sparse disk tier remains future work; the UI does not mislabel the RAM cache as persistent storage.

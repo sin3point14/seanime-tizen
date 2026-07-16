@@ -40,5 +40,10 @@ interface Window {
   tizen?: {
     tvinputdevice?: { registerKey(key: string): void; registerKeyBatch?(keys: string[], success?: () => void, error?: () => void): void }
     application?: { getCurrentApplication(): { exit(): void } }
+    systeminfo?: {
+      getTotalMemory(): number
+      getAvailableMemory(): number
+      getPropertyValue(property: "STORAGE", success: (value: { units?: Array<{ type?: string; capacity?: number; availableCapacity?: number }> }) => void, error?: (error: unknown) => void): void
+    }
   }
 }
