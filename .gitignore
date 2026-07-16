@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+.tizen-build/
+tizen-output/
+tizen-package/
+.diagnostic-minimal/
+.diagnostic-package/
+*.wgt
+*.p12
+*.pwd
+.env*
+!/.env.example
