@@ -65,8 +65,11 @@ jobs:
           mkdir -p .tizen-build tizen-output tizen-package artifacts
           cp -R dist/. .tizen-build/
           cp config.xml icon.png .tizen-build/
-          tizen build-web --output tizen-output -- .tizen-build
-          tizen package --type wgt --sign SeanimeTV --output tizen-package -- tizen-output
+          tizen build-web --output "$GITHUB_WORKSPACE/tizen-output" -- "$GITHUB_WORKSPACE/.tizen-build"
+          tizen package --type wgt --sign SeanimeTV --output "$GITHUB_WORKSPACE/tizen-package" -- "$GITHUB_WORKSPACE/tizen-output" || {
+            cat "$HOME/tizen-studio-data/cli/logs/cli.log" 2>/dev/null || true
+            exit 1
+          }
           WGT="$(find tizen-package -type f -name '*.wgt' -print -quit)"
           test -n "$WGT"
           VERSION="${GITHUB_REF_NAME:-manual}"
