@@ -2,6 +2,7 @@ import { FocusContext, setFocus, useFocusable } from "@noriginmedia/norigin-spat
 import { useEffect, useMemo, useState } from "react"
 import type { SeanimeClient } from "../api/seanime-client"
 import { availableEpisode } from "../domain/library"
+import { episodeRanges } from "../domain/episode-ranges"
 import { resumePosition } from "../domain/playback"
 import { titleFor } from "../domain/search"
 import type { AnimeEntry, Episode, PlaybackSource, WatchHistoryItem } from "../domain/types"
@@ -12,6 +13,7 @@ export function DetailsScreen({ mediaId, client, settings, onBack, onPlay }: { m
   const [entry, setEntry] = useState<AnimeEntry | null>(null)
   const [history, setHistory] = useState<WatchHistoryItem | undefined>()
   const [error, setError] = useState("")
+  const [episodeRange, setEpisodeRange] = useState(0)
   const { ref, focusKey } = useFocusable({ focusKey: "DETAILS", trackChildren: true })
   useEffect(() => {
     Promise.all([client.getAnimeEntry(mediaId), client.getHistoryItem(mediaId).catch(() => ({ found: false, item: undefined }))])
@@ -19,6 +21,9 @@ export function DetailsScreen({ mediaId, client, settings, onBack, onPlay }: { m
       .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [client, mediaId])
   const episodes = useMemo(() => (entry?.episodes ?? []).filter(ep => ep.type === "main" || availableEpisode(ep)), [entry])
+  const ranges = useMemo(() => episodeRanges(episodes.length), [episodes.length])
+  const visibleEpisodes = ranges.length ? episodes.slice(episodeRange * 50, episodeRange * 50 + 50) : episodes
+  useEffect(() => { setEpisodeRange(0) }, [mediaId])
 
   const play = async (episode: Episode) => {
     if (!entry?.media || !episode.localFile) return
@@ -53,10 +58,14 @@ export function DetailsScreen({ mediaId, client, settings, onBack, onPlay }: { m
       <div className="chips"><span>{media?.episodes || episodes.length} episodes</span>{media?.duration && <span>{media.duration} min</span>}{media?.status && <span>{media.status.replace(/_/g, " ")}</span>}</div>
       <p className="description">{description}</p>
       {featuredEpisode && <Focusable className="primary play-button" onEnter={() => play(featuredEpisode)}>▶ {inProgress ? "Resume" : "Play"} {featuredEpisode.displayTitle}</Focusable>}
-      <section className="episodes"><h2>Episodes</h2><div className="episode-grid">
-        {episodes.map(episode => {
+      <section className="episodes"><h2>Episodes</h2>
+        {ranges.length > 0 && <div className="episode-range-row" aria-label="Episode ranges">{ranges.map(range =>
+          <Focusable key={range.index} className={episodeRange === range.index ? "selected" : ""} onEnter={() => setEpisodeRange(range.index)}>{range.start}–{range.end}</Focusable>
+        )}</div>}
+        <div className="episode-grid">
+        {visibleEpisodes.map((episode, index) => {
           const available = availableEpisode(episode)
-          return <Focusable key={`${episode.type}-${episode.episodeNumber}`} disabled={!available} className="episode-tile" onEnter={() => play(episode)}>
+          return <Focusable focusKey={index === 0 ? `EPISODE_RANGE_${episodeRange}_FIRST` : undefined} key={`${episode.type}-${episode.episodeNumber}`} disabled={!available} className="episode-tile" onEnter={() => play(episode)}>
             <span className="episode-number">{episode.episodeNumber}</span><span><strong>{episode.episodeTitle || episode.displayTitle}</strong><small>{available ? (episode.localFile?.name || "Ready to play") : "Unavailable on server"}</small></span>{available && <b>▶</b>}
           </Focusable>
         })}

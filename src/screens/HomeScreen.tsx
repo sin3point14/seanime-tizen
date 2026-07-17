@@ -16,7 +16,7 @@ export function HomeScreen({ collection, onOpen, onRefresh, refreshing }: { coll
         const entry: LibraryEntry = { mediaId: media?.id ?? episode.localFile?.mediaId ?? 0, media }
         const image = episode.episodeMetadata?.image || media?.bannerImage || media?.coverImage?.large
         return <Focusable key={`${entry.mediaId}-${episode.episodeNumber}`} focusKey={index === 0 ? "HOME_FIRST" : undefined} className="continue-card" onEnter={() => onOpen(entry.mediaId)}>
-          <div className="episode-image" style={image ? { backgroundImage: `url(${image})` } : undefined}><span className="play-mark">▶</span></div>
+          <div className="episode-image">{image && <img src={image} alt="" loading="lazy" decoding="async" />}<span className="play-mark">▶</span></div>
           <strong>{titleFor(entry)}</strong><small>{episode.displayTitle}</small>
         </Focusable>
       })}

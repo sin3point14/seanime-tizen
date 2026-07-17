@@ -1,6 +1,8 @@
 export const RemoteKey = {
   Left: 37,
+  Up: 38,
   Right: 39,
+  Down: 40,
   Enter: 13,
   Back: 10009,
   Play: 415,

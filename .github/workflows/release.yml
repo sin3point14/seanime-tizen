@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies and test
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Install Tizen Web CLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y default-jre libwebkit2gtk-4.0-37 libglu1-mesa libpng16-16 libjpeg-turbo8 zip
+          curl --fail --location --retry 3 \
+            https://download.tizen.org/sdk/Installer/tizen-studio_6.0/web-cli_Tizen_Studio_6.0_ubuntu-64.bin \
+            --output /tmp/tizen-installer.bin
+          chmod +x /tmp/tizen-installer.bin
+          /tmp/tizen-installer.bin --accept-license "$HOME/tizen-studio"
+          echo "$HOME/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
+          echo "$HOME/tizen-studio/tools" >> "$GITHUB_PATH"
+
+      - name: Restore signing profile
+        env:
+          AUTHOR_P12: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
+          AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          DISTRIBUTOR_P12: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/seanime-certificates"
+          printf '%s' "$AUTHOR_P12" | base64 --decode > "$RUNNER_TEMP/seanime-certificates/author.p12"
+          printf '%s' "$DISTRIBUTOR_P12" | base64 --decode > "$RUNNER_TEMP/seanime-certificates/distributor.p12"
+          tizen security-profiles add --active --force --name SeanimeTV \
+            --author "$RUNNER_TEMP/seanime-certificates/author.p12" \
+            --password "$AUTHOR_PASSWORD" \
+            --dist "$RUNNER_TEMP/seanime-certificates/distributor.p12" \
+            --dist-password "$DISTRIBUTOR_PASSWORD"
+          tizen cli-config "profiles.path=$HOME/tizen-studio-data/profile/profiles.xml"
+
+      - name: Build and sign WGT
+        run: |
+          rm -rf .tizen-build tizen-output tizen-package artifacts
+          mkdir -p .tizen-build tizen-output tizen-package artifacts
+          cp -R dist/. .tizen-build/
+          cp config.xml icon.png .tizen-build/
+          tizen build-web --output tizen-output -- .tizen-build
+          tizen package --type wgt --sign SeanimeTV --output tizen-package -- tizen-output
+          WGT="$(find tizen-package -type f -name '*.wgt' -print -quit)"
+          test -n "$WGT"
+          VERSION="${GITHUB_REF_NAME:-manual}"
+          cp "$WGT" "artifacts/SeanimeTV-${VERSION}.wgt"
+          (cd dist && zip -qr "../artifacts/SeanimeTV-web-${VERSION}.zip" .)
+          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/* --generate-notes --title "Seanime TV $GITHUB_REF_NAME"
+
+      - name: Upload manual package
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeanimeTV-manual-release
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

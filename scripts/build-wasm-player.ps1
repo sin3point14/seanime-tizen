@@ -12,7 +12,7 @@ $arguments = @(
   "-s ENVIRONMENT_MAY_BE_TIZEN=1 -s USE_FFMPEG=1 -s FETCH=1",
   "-pthread -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=1",
   "-s TOTAL_MEMORY=134217728 -s ALLOW_MEMORY_GROWTH=1 -s WASM_MEM_MAX=536870912",
-  "-s EXPORTED_FUNCTIONS=`"['_main','_seanime_open','_seanime_play','_seanime_pause','_seanime_seek','_seanime_stop','_seanime_duration','_seanime_current_time','_seanime_state','_seanime_bandwidth']`"",
+  "-s EXPORTED_FUNCTIONS=`"['_main','_seanime_open','_seanime_play','_seanime_pause','_seanime_seek','_seanime_stop','_seanime_duration','_seanime_current_time','_seanime_state','_seanime_bandwidth','_seanime_buffered_start','_seanime_buffered_end','_seanime_time_for_byte','_seanime_byte_range_has_media','_seanime_debug_snapshot']`"",
   "-s EXTRA_EXPORTED_RUNTIME_METHODS=`"['cwrap']`""
 ) -join " "
 $command = "call `"$EnvScript`" && $arguments"

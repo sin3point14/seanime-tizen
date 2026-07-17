@@ -24,7 +24,10 @@ function Reset-ProjectDirectory([string]$Path) {
 
 function Build-App {
   Push-Location $Project
-  try { npm.cmd run build } finally { Pop-Location }
+  try {
+    npm.cmd run build
+    if ($LASTEXITCODE -ne 0) { throw "Web application build failed" }
+  } finally { Pop-Location }
   Reset-ProjectDirectory $Build
   Reset-ProjectDirectory $Output
   Copy-Item -Path (Join-Path $Project "dist\*") -Destination $Build -Recurse

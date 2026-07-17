@@ -1,3 +1,4 @@
+import { setFocus } from "@noriginmedia/norigin-spatial-navigation"
 import { useMemo, useState } from "react"
 import type { LibraryCollection, LibraryEntry } from "../domain/types"
 import { localEntries } from "../domain/library"
@@ -21,13 +22,18 @@ export function SearchScreen({ collection, onOpen }: { collection: LibraryCollec
     onOpen(mediaId)
   }
   const clearRecent = () => { storage.clearRecentSearchTitles(); setRecentIds([]) }
+  const clearArrow = (direction: string) => {
+    if (direction !== "left" || recent.length === 0) return true
+    setFocus("SEARCH_RECENT_0")
+    return false
+  }
 
   return <div className="screen search-screen">
     <div className="search-input"><span>⌕</span><strong>{query || "Search your local library"}</strong><i>{query.length}</i></div>
     <div className="search-layout"><Keyboard value={query} onChange={setQuery} /><section className="search-results">
       {!query && recent.length > 0 && <>
-        <div className="section-heading"><h2>Recently opened</h2><Focusable className="clear-history" onEnter={clearRecent}>Clear</Focusable></div>
-        <div className="result-grid recent-grid">{recent.map(entry => <MediaCard key={entry.mediaId} entry={entry} onOpen={() => open(entry.mediaId)} />)}</div>
+        <div className="section-heading"><h2>Recently opened</h2><Focusable className="clear-history" onArrowPress={clearArrow} onEnter={clearRecent}>Clear</Focusable></div>
+        <div className="result-grid recent-grid">{recent.map((entry, index) => <MediaCard focusKey={`SEARCH_RECENT_${index}`} key={entry.mediaId} entry={entry} onOpen={() => open(entry.mediaId)} />)}</div>
       </>}
       <h2>{query ? `Results for “${query}”` : recent.length ? "Suggestions" : "Your library"}</h2>
       <div className="result-grid">{entries.map(entry => <MediaCard key={entry.mediaId} entry={entry} onOpen={() => open(entry.mediaId)} />)}</div>

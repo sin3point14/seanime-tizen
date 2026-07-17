@@ -1,9 +1,10 @@
 export type PlaybackBackend = "avplay" | "wasm-experimental"
 export type CacheMode = "automatic" | "custom"
+export type CacheTimelineDisplay = "playable" | "network-cache"
 export type SubtitleQuality = "performance" | "balanced" | "quality"
 
 export interface PlayerSettings {
-  version: 3
+  version: 6
   resumeEnabled: boolean
   autoplayNext: boolean
   subtitlesEnabled: boolean
@@ -22,20 +23,21 @@ export interface PlayerSettings {
   cacheSecondsEnabled: boolean
   cacheSeconds: number
   cacheBytesEnabled: boolean
-  cacheForwardMiB: number
-  cacheBackMiB: number
-  cacheHotRamMiB: number
+  cacheTotalMiB: number
+  cacheForwardPercent: number
+  cacheMinimumFreeMiB: number
+  cacheTimelineDisplay: CacheTimelineDisplay
 }
 
 export const DEFAULT_SETTINGS: PlayerSettings = {
-  version: 3,
+  version: 6,
   resumeEnabled: true,
   autoplayNext: true,
   subtitlesEnabled: true,
   preferredAudio: ["jpn", "ja", "jp", "japanese"],
   preferredSubtitles: ["eng", "en", "english"],
   seekStepSeconds: 10,
-  playbackBackend: "avplay",
+  playbackBackend: "wasm-experimental",
   avplayInitialBufferSeconds: 15,
   avplayRecoveryBufferSeconds: 30,
   avplayBufferTimeoutSeconds: 30,
@@ -43,19 +45,23 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
   subtitleFontScale: 100,
   subtitleBottomPercent: 8,
   subtitleQuality: "balanced",
-  cacheMode: "automatic",
+  cacheMode: "custom",
   cacheSecondsEnabled: true,
   cacheSeconds: 300,
   cacheBytesEnabled: true,
-  cacheForwardMiB: 820,
-  cacheBackMiB: 204,
-  cacheHotRamMiB: 64,
+  cacheTotalMiB: 1024,
+  cacheForwardPercent: 80,
+  cacheMinimumFreeMiB: 1024,
+  cacheTimelineDisplay: "network-cache",
 }
 
 type LegacySettings = Partial<PlayerSettings> & {
   seekStep?: number
   bufferPolicy?: "fast" | "balanced" | "stable"
   subtitleFontSize?: number
+  cacheForwardMiB?: number
+  cacheBackMiB?: number
+  cacheHotRamMiB?: number
 }
 
 export function migrateSettings(value: unknown): PlayerSettings {
@@ -73,16 +79,20 @@ export function migrateSettings(value: unknown): PlayerSettings {
     : DEFAULT_SETTINGS.subtitleFontScale
   const secondsEnabled = typeof input.cacheSecondsEnabled === "boolean" ? input.cacheSecondsEnabled : DEFAULT_SETTINGS.cacheSecondsEnabled
   const bytesEnabled = typeof input.cacheBytesEnabled === "boolean" ? input.cacheBytesEnabled : DEFAULT_SETTINGS.cacheBytesEnabled
+  const legacyForwardMiB = clamp(input.cacheForwardMiB, 0, 8192, 0)
+  const legacyBackMiB = clamp(input.cacheBackMiB, 0, 8192, 0)
+  const legacyTotalMiB = legacyForwardMiB + legacyBackMiB
+  const migratedForwardPercent = legacyTotalMiB > 0 ? Math.round(legacyForwardMiB / legacyTotalMiB * 100) : DEFAULT_SETTINGS.cacheForwardPercent
 
   return {
     ...DEFAULT_SETTINGS,
     ...legacyBuffer,
     ...input,
-    version: 3,
+    version: 6,
     preferredAudio: strings(input.preferredAudio, DEFAULT_SETTINGS.preferredAudio),
     preferredSubtitles: strings(input.preferredSubtitles, DEFAULT_SETTINGS.preferredSubtitles),
     seekStepSeconds: clamp(input.seekStepSeconds ?? input.seekStep, 5, 60, DEFAULT_SETTINGS.seekStepSeconds),
-    playbackBackend: input.playbackBackend === "wasm-experimental" ? input.playbackBackend : "avplay",
+    playbackBackend: input.playbackBackend === "wasm-experimental" || input.playbackBackend === "avplay" ? input.playbackBackend : DEFAULT_SETTINGS.playbackBackend,
     avplayInitialBufferSeconds: clamp(input.avplayInitialBufferSeconds ?? legacyBuffer.avplayInitialBufferSeconds, 4, 120, DEFAULT_SETTINGS.avplayInitialBufferSeconds),
     avplayRecoveryBufferSeconds: clamp(input.avplayRecoveryBufferSeconds ?? legacyBuffer.avplayRecoveryBufferSeconds, 4, 120, DEFAULT_SETTINGS.avplayRecoveryBufferSeconds),
     avplayBufferTimeoutSeconds: clamp(input.avplayBufferTimeoutSeconds, 3, 120, DEFAULT_SETTINGS.avplayBufferTimeoutSeconds),
@@ -90,13 +100,14 @@ export function migrateSettings(value: unknown): PlayerSettings {
     subtitleFontScale: clamp(input.subtitleFontScale ?? legacyScale, 50, 200, DEFAULT_SETTINGS.subtitleFontScale),
     subtitleBottomPercent: clamp(input.subtitleBottomPercent, 0, 30, DEFAULT_SETTINGS.subtitleBottomPercent),
     subtitleQuality: input.subtitleQuality === "performance" || input.subtitleQuality === "quality" ? input.subtitleQuality : "balanced",
-    cacheMode: input.cacheMode === "custom" ? "custom" : "automatic",
+    cacheMode: input.cacheMode === "custom" || input.cacheMode === "automatic" ? input.cacheMode : DEFAULT_SETTINGS.cacheMode,
     cacheSecondsEnabled: secondsEnabled || !bytesEnabled,
     cacheSeconds: clamp(input.cacheSeconds, 30, 7200, DEFAULT_SETTINGS.cacheSeconds),
     cacheBytesEnabled: bytesEnabled || !secondsEnabled,
-    cacheForwardMiB: clamp(input.cacheForwardMiB, 32, 8192, DEFAULT_SETTINGS.cacheForwardMiB),
-    cacheBackMiB: clamp(input.cacheBackMiB, 16, 2048, DEFAULT_SETTINGS.cacheBackMiB),
-    cacheHotRamMiB: clamp(input.cacheHotRamMiB, 16, 256, DEFAULT_SETTINGS.cacheHotRamMiB),
+    cacheTotalMiB: clamp(input.cacheTotalMiB ?? (legacyTotalMiB || undefined), 32, 10240, DEFAULT_SETTINGS.cacheTotalMiB),
+    cacheForwardPercent: clamp(input.cacheForwardPercent ?? migratedForwardPercent, 0, 100, DEFAULT_SETTINGS.cacheForwardPercent),
+    cacheMinimumFreeMiB: clamp(input.cacheMinimumFreeMiB, 0, 10240, DEFAULT_SETTINGS.cacheMinimumFreeMiB),
+    cacheTimelineDisplay: input.cacheTimelineDisplay === "network-cache" || input.cacheTimelineDisplay === "playable" ? input.cacheTimelineDisplay : DEFAULT_SETTINGS.cacheTimelineDisplay,
   }
 }
 

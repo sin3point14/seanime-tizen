@@ -12,7 +12,7 @@ import { storage } from "../lib/storage"
 import { AssSubtitleRenderer, videoViewport } from "../platform/ass-subtitle-renderer"
 import { AvPlayAdapter } from "../platform/avplay-adapter"
 import { createPlaybackEngine } from "../platform/engine-factory"
-import type { PlaybackEngine, PlaybackEngineEvent } from "../platform/playback-engine"
+import type { CacheStatus, PlaybackEngine, PlaybackEngineEvent } from "../platform/playback-engine"
 import { RemoteKey } from "../platform/remote"
 import { emptyResources, getSystemResources } from "../platform/system-info"
 import { diagnostic } from "../platform/diagnostics"
@@ -31,7 +31,9 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   const [duration, setDuration] = useState(0)
   const [buffering, setBuffering] = useState<number | null>(null)
   const [bufferedRanges, setBufferedRanges] = useState<Array<{ start: number; end: number }>>([])
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null)
   const [error, setError] = useState("")
+  const [cacheWarning, setCacheWarning] = useState("")
   const [mediaContainer, setMediaContainer] = useState<MediaContainer | null>(null)
   const [resources, setResources] = useState<SystemResources>(emptyResources)
   const [networkTest, setNetworkTest] = useState("Not tested")
@@ -44,11 +46,13 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   const [subtitleStatus, setSubtitleStatus] = useState("No subtitle track loaded")
   const [panel, setPanel] = useState<Panel>(null)
   const [overlay, setOverlay] = useState(true)
+  const [controlActivity, setControlActivity] = useState(0)
   const [countdown, setCountdown] = useState<number | null>(null)
   const [nativeSubtitle, setNativeSubtitle] = useState("")
   const [eof, setEof] = useState(false)
   const completed = useRef(false)
   const nativeSubtitleTimer = useRef<number | null>(null)
+  const bufferingRevealTimer = useRef<number | null>(null)
   const seekTarget = useRef<number | null>(null)
   const seekQueueRef = useRef<QueuedSeekController | null>(null)
   const currentRef = useRef({ time: 0, duration: 0 })
@@ -58,10 +62,15 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   const mediaRef = useRef<MediaContainer | null>(null)
   const serverSubtitleTracksRef = useRef<TrackDescriptor[]>([])
   const playingRef = useRef(false)
+  const overlayFocusRef = useRef<"timeline" | "actions">("timeline")
   const assCanvasRef = useRef<HTMLCanvasElement>(null)
   const assRendererRef = useRef<AssSubtitleRenderer | null>(null)
   const activeSubtitleTrackRef = useRef<TrackDescriptor | null>(null)
   const playbackGeneration = useRef(0)
+  const diagnosticSeekScheduled = useRef(false)
+  const diagnosticSeekTimer = useRef<number | null>(null)
+  const diagnosticReopenCycle = useRef(0)
+  const diagnosticReopenTimer = useRef<number | null>(null)
   const { ref, focusKey } = useFocusable({ focusKey: "PLAYER", trackChildren: true })
   const tracks = useMemo(() => [...avTracks.filter(track => track.type !== "TEXT" || serverSubtitleTracks.length === 0), ...serverSubtitleTracks], [avTracks, serverSubtitleTracks])
   const subtitle = useMemo(() => cueAt(subtitleCues, time)?.text ?? nativeSubtitle, [nativeSubtitle, subtitleCues, time])
@@ -149,7 +158,10 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     let disposed = false
     let active: PlaybackEngine | null = null
     let unsubscribe: (() => void) | null = null
-    setError(""); setBuffering(null); setBufferedRanges([]); setTime(0); setDuration(0); setMediaContainer(null); setServerSubtitleTracks([]); serverSubtitleTracksRef.current = []; setSubtitleCues([]); setNativeSubtitle(""); setSubtitleRenderer("off"); setSubtitleStatus("No subtitle track loaded"); setFallbackReason(null)
+    if (bufferingRevealTimer.current !== null) window.clearTimeout(bufferingRevealTimer.current)
+    bufferingRevealTimer.current = null
+    diagnostic("player.generation.start", { generation, mediaId: source.mediaId, episode: source.episode.episodeNumber, progressNumber: source.episode.progressNumber, path: source.localFile.path, resumePosition: source.resumePosition, requestedBackend: settingsRef.current.playbackBackend })
+    setError(""); setCacheWarning(""); setBuffering(null); setBufferedRanges([]); setCacheStatus(null); setTime(0); setDuration(0); setPlaying(true); playingRef.current = true; setMediaContainer(null); setServerSubtitleTracks([]); serverSubtitleTracksRef.current = []; setSubtitleCues([]); setNativeSubtitle(""); setSubtitleRenderer("off"); setSubtitleStatus("No subtitle track loaded"); setFallbackReason(null)
 
     const attach = (instance: PlaybackEngine) => {
       unsubscribe?.()
@@ -157,25 +169,39 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       engineRef.current = instance
       seekQueueRef.current?.reset()
       seekQueueRef.current = new QueuedSeekController(async target => {
+        diagnostic("seek.perform", { target, engine: instance.name, before: instance.currentTime / 1000 })
         await instance.seek(target * 1000)
         return instance.currentTime / 1000
       }, (seconds, committed) => {
+        diagnostic("seek.update", { seconds, committed, engine: instance.name })
         seekTarget.current = committed ? null : seconds
         currentRef.current.time = seconds; setTime(seconds)
         void assRendererRef.current?.seek(seconds)
       })
       setEngine(instance)
       setEngineName(instance.name)
+      diagnostic("player.generation.attach", { generation, engine: instance.name })
       unsubscribe = instance.subscribe((event: PlaybackEngineEvent) => {
         if (disposed || generation !== playbackGeneration.current) return
         if (event.type !== "time") diagnostic("player.event", { engine: instance.name, ...event }, event.type === "error" ? "error" : "info")
         if (event.type === "time" && seekTarget.current === null) {
           const seconds = event.milliseconds / 1000
           setTime(seconds); currentRef.current.time = seconds
-          if (instance.exactBufferedRanges) setBufferedRanges(instance.getBufferedRanges())
         }
-        if (event.type === "buffering") setBuffering(event.percent >= 100 ? null : event.percent)
+        if (event.type === "buffering") {
+          if (event.percent >= 100) {
+            if (bufferingRevealTimer.current !== null) window.clearTimeout(bufferingRevealTimer.current)
+            bufferingRevealTimer.current = null
+            setBuffering(null)
+          } else if (bufferingRevealTimer.current === null) {
+            bufferingRevealTimer.current = window.setTimeout(() => {
+              bufferingRevealTimer.current = null
+              setBuffering(event.percent)
+            }, 400)
+          }
+        }
         if (event.type === "error") setError(event.message)
+        if (event.type === "warning") setCacheWarning(event.message)
         if (event.type === "subtitle") {
           if (nativeSubtitleTimer.current !== null) window.clearTimeout(nativeSubtitleTimer.current)
           setNativeSubtitle(event.text)
@@ -194,7 +220,16 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         index: track.index, type: "TEXT", language: track.language || "unknown", title: track.title || `Subtitle ${track.index + 1}`, codec: track.extension || track.codec, source: "server", url: track.link, raw: track,
       }))
       serverSubtitleTracksRef.current = extracted; setServerSubtitleTracks(extracted)
-      const selection = createPlaybackEngine(settingsRef.current, container, resourcesRef.current)
+      let playbackResources = resourcesRef.current
+      if (playbackResources.availableStorageBytes === null) {
+        playbackResources = await getSystemResources()
+        resourcesRef.current = playbackResources
+        setResources(playbackResources)
+      }
+      const policy = effectiveCachePolicy(settingsRef.current, playbackResources)
+      const storageWarning = policy.warnings.find(warning => warning.includes("disk cache") || warning.includes("Disk caching"))
+      if (settingsRef.current.playbackBackend === "wasm-experimental" && storageWarning) setCacheWarning(storageWarning)
+      const selection = createPlaybackEngine(settingsRef.current, container, playbackResources)
       diagnostic("player.engine-selected", { requested: settingsRef.current.playbackBackend, selected: selection.engine.name, fallback: selection.fallbackReason, mediaInfo: container?.mediaInfo })
       setFallbackReason(selection.fallbackReason)
       attach(selection.engine)
@@ -209,21 +244,53 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         instance.play(); setPlaying(true)
         if (instance instanceof AvPlayAdapter) await instance.waitForState("PLAYING")
         applyTracks(instance)
+        if (__DIAGNOSTICS__ && __DIAGNOSTIC_AUTO_SEEK_SECONDS__ > 0 && instance.name === "FFmpeg + Samsung WASM Player" && !diagnosticSeekScheduled.current) {
+          diagnosticSeekScheduled.current = true
+          diagnosticSeekTimer.current = window.setTimeout(() => {
+            diagnostic("seek.automatic-test", { target: __DIAGNOSTIC_AUTO_SEEK_SECONDS__ })
+            currentRef.current.time = __DIAGNOSTIC_AUTO_SEEK_SECONDS__
+            setTime(__DIAGNOSTIC_AUTO_SEEK_SECONDS__)
+            void instance.seek(__DIAGNOSTIC_AUTO_SEEK_SECONDS__ * 1000)
+          }, 8_000)
+        }
       }
       try { await prepareEngine(selection.engine, source.resumePosition) }
       catch (reason) {
         diagnostic("player.prepare-failed", { engine: selection.engine.name, message: reason instanceof Error ? reason.message : String(reason), stack: reason instanceof Error ? reason.stack : undefined }, "error")
+        if (disposed) return
         if (selection.engine.name !== "FFmpeg + Samsung WASM Player") throw reason
         const position = Math.max(source.resumePosition, currentRef.current.time)
-        selection.engine.stop()
+        diagnostic("player.fallback.teardown-start", { generation, engine: selection.engine.name })
+        await selection.engine.stop()
+        diagnostic("player.fallback.teardown-complete", { generation, engine: selection.engine.name })
         const fallback = new AvPlayAdapter()
         setError("")
         setFallbackReason(`Experimental playback failed; AVPlay resumed automatically: ${reason instanceof Error ? reason.message : String(reason)}`)
         attach(fallback)
+        diagnostic("player.fallback.prepare-start", { generation, position, reason: reason instanceof Error ? reason.message : String(reason) })
         await prepareEngine(fallback, position)
+        diagnostic("player.fallback.prepare-complete", { generation, state: fallback.state })
       }
       if (disposed) return
-      setFocus("PLAYER_PLAY")
+      setFocus("PLAYER_TIMELINE")
+      if (__DIAGNOSTICS__ && __DIAGNOSTIC_REOPEN_CYCLES__ > diagnosticReopenCycle.current) {
+        const cycle = diagnosticReopenCycle.current++
+        diagnostic("reopen-cycle.playing", { cycle, resumePosition: source.resumePosition })
+        diagnosticReopenTimer.current = window.setTimeout(() => {
+          void (async () => {
+            if (cycle === 1) {
+              diagnostic("reopen-cycle.seek", { cycle, target: 300 })
+              await selection.engine.seek(300_000)
+              await new Promise(resolve => window.setTimeout(resolve, 3_000))
+            }
+            diagnostic("reopen-cycle.close", { cycle })
+            await selection.engine.stop()
+            if (disposed) return
+            engineRef.current = null
+            setSource(current => ({ ...current, resumePosition: cycle === 1 ? 300 : 0 }))
+          })().catch(reason => diagnostic("reopen-cycle.error", { cycle, message: reason instanceof Error ? reason.message : String(reason) }, "error"))
+        }, 4_000)
+      }
       void client.startTracking(source.mediaId, source.episode.progressNumber).catch(() => undefined)
       const saved = storage.getTrackState() as TrackState
       const subtitlesOff = saved.subtitlesOff ?? !settingsRef.current.subtitlesEnabled
@@ -235,12 +302,16 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         })
       }
     }
-    void start().catch(reason => { if (!disposed) setError(reason instanceof Error ? reason.message : String(reason)) })
+    void start().catch(reason => { if (!disposed) { setPlaying(false); playingRef.current = false; setError(reason instanceof Error ? reason.message : String(reason)) } })
     completed.current = false; setEof(false)
     return () => {
       disposed = true
+      diagnostic("player.generation.cleanup-start", { generation, engine: active?.name, state: active?.state, time: currentRef.current.time })
       if (nativeSubtitleTimer.current !== null) window.clearTimeout(nativeSubtitleTimer.current)
-      unsubscribe?.(); void flush(); void client.cancelTracking().catch(() => undefined); active?.stop()
+      if (bufferingRevealTimer.current !== null) window.clearTimeout(bufferingRevealTimer.current)
+      if (diagnosticSeekTimer.current !== null) window.clearTimeout(diagnosticSeekTimer.current)
+      if (diagnosticReopenTimer.current !== null) window.clearTimeout(diagnosticReopenTimer.current)
+      unsubscribe?.(); void flush(); void client.cancelTracking().catch(() => undefined); if (active) void active.stop().then(() => diagnostic("player.generation.cleanup-complete", { generation, engine: active?.name }))
       engineRef.current = null
       seekQueueRef.current?.reset(); seekQueueRef.current = null
     }
@@ -251,6 +322,18 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   useEffect(() => () => { void assRendererRef.current?.destroy(); assRendererRef.current = null }, [])
 
   useEffect(() => { currentRef.current = { time, duration } }, [time, duration])
+  useEffect(() => {
+    if (!engine?.exactBufferedRanges) return
+    const update = () => {
+      const next = engine.getBufferedRanges()
+      setBufferedRanges(previous => sameRanges(previous, next) ? previous : next)
+      const nextCache = engine.getCacheStatus()
+      setCacheStatus(previous => sameCacheStatus(previous, nextCache) ? previous : nextCache)
+    }
+    update()
+    const interval = window.setInterval(update, 500)
+    return () => window.clearInterval(interval)
+  }, [engine])
   useEffect(() => { playingRef.current = playing; assRendererRef.current?.setPlaying(playing) }, [playing])
   useEffect(() => {
     if (!playing) return
@@ -280,15 +363,57 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   }
   const seek = (seconds: number, revealControls = true) => {
     if (!seekQueueRef.current) return
+    diagnostic("remote.seek", { delta: seconds, current: currentRef.current.time, duration, revealControls })
     seekQueueRef.current.enqueue(seconds, currentRef.current.time, duration)
     if (revealControls) setOverlay(true)
   }
-  const exit = () => { void flush().then(onExit, onExit) }
+  const showControls = (target: "timeline" | "actions") => {
+    overlayFocusRef.current = target
+    setOverlay(true)
+    setControlActivity(value => value + 1)
+    window.setTimeout(() => setFocus(target === "timeline" ? "PLAYER_TIMELINE" : "PLAYER_AUDIO"), 0)
+  }
+  const actionArrow = (direction: string) => {
+    if (direction !== "up") return true
+    showControls("timeline")
+    return false
+  }
+  const timelineArrow = (direction: string) => {
+    if (direction === "left" || direction === "right") {
+      seek(direction === "left" ? -settings.seekStepSeconds : settings.seekStepSeconds, false)
+      setControlActivity(value => value + 1)
+      return false
+    }
+    if (direction === "down") {
+      showControls("actions")
+      return false
+    }
+    if (direction === "up") {
+      setOverlay(false)
+      return false
+    }
+    return true
+  }
+  const exit = () => {
+    const instance = engineRef.current
+    engineRef.current = null
+    diagnostic("player.exit.start", { generation: playbackGeneration.current, engine: instance?.name, state: instance?.state, time: currentRef.current.time })
+    void Promise.all([flush(), instance?.stop() ?? Promise.resolve()]).then(() => {
+      diagnostic("player.exit.complete", { generation: playbackGeneration.current, engine: instance?.name })
+      onExit()
+    }, reason => {
+      diagnostic("player.exit.failed", { generation: playbackGeneration.current, message: reason instanceof Error ? reason.message : String(reason) }, "error")
+      onExit()
+    })
+  }
   const openEpisode = async (episode: PlaybackSource["episode"]) => {
     if (!episode.localFile) return
     let saved = 0
     try { const history = await client.getHistoryItem(source.mediaId); if (history.item?.episodeNumber === episode.progressNumber) saved = resumePosition(history.item, settings.resumeEnabled) } catch { /* Resume is optional. */ }
-    void flush()
+    diagnostic("player.episode-switch.start", { from: source.episode.episodeNumber, to: episode.episodeNumber, engine: engineRef.current?.name })
+    await Promise.all([flush(), engineRef.current?.stop() ?? Promise.resolve()])
+    diagnostic("player.episode-switch.teardown-complete", { from: source.episode.episodeNumber, to: episode.episodeNumber })
+    engineRef.current = null
     const nextSource = { ...source, episode, localFile: episode.localFile, url: client.mediaUrl(episode.localFile.path), resumePosition: saved }
     setPanel(null); setCountdown(null); setSource(nextSource); onSourceChange(nextSource)
   }
@@ -296,29 +421,35 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (panel) { if (event.keyCode === RemoteKey.Back) { event.preventDefault(); setPanel(parentPanel(panel)); setFocus("PLAYER_PLAY") }; return }
+      diagnostic("remote.key", { keyCode: event.keyCode, key: event.key, overlay, panel, playing })
+      if (panel) { if (event.keyCode === RemoteKey.Back) { event.preventDefault(); setPanel(parentPanel(panel)); setFocus("PLAYER_AUDIO") }; return }
       if (!overlay && (event.keyCode === RemoteKey.Left || event.keyCode === RemoteKey.Right)) {
         event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation()
-        seek(event.keyCode === RemoteKey.Left ? -settings.seekStepSeconds : settings.seekStepSeconds, false); return
+        seek(event.keyCode === RemoteKey.Left ? -settings.seekStepSeconds : settings.seekStepSeconds, false)
+        showControls("timeline"); return
       }
       if (!overlay && event.keyCode === RemoteKey.Enter) {
         event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation()
         if (playing) { engineRef.current?.pause(); setPlaying(false); void flush() }
-        setOverlay(true); return
+        showControls("timeline"); return
+      }
+      if (!overlay && (event.keyCode === RemoteKey.Up || event.keyCode === RemoteKey.Down)) {
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation()
+        showControls("timeline"); return
       }
       if (event.keyCode === RemoteKey.Back) { event.preventDefault(); exit() }
       else if ([RemoteKey.Play, RemoteKey.Pause, RemoteKey.PlayPause].includes(event.keyCode as never)) togglePlay()
       else if (event.keyCode === RemoteKey.Stop) exit()
       else if (event.keyCode === RemoteKey.Rewind) seek(-settings.seekStepSeconds)
       else if (event.keyCode === RemoteKey.FastForward) seek(settings.seekStepSeconds)
-      else setOverlay(true)
+      else { setOverlay(true); setControlActivity(value => value + 1) }
     }
     window.addEventListener("keydown", handle, true)
     return () => window.removeEventListener("keydown", handle, true)
   })
   useEffect(() => { const visibility = () => { if (document.hidden) void flush() }; document.addEventListener("visibilitychange", visibility); window.addEventListener("beforeunload", flush); return () => { document.removeEventListener("visibilitychange", visibility); window.removeEventListener("beforeunload", flush) } }, [flush])
   useEffect(() => { document.body.classList.add("player-active"); document.documentElement.classList.add("player-active"); return () => { document.body.classList.remove("player-active"); document.documentElement.classList.remove("player-active") } }, [])
-  useEffect(() => { if (!overlay || !playing || panel || countdown !== null) return; const timeout = window.setTimeout(() => setOverlay(false), 5_000); return () => clearTimeout(timeout) }, [countdown, overlay, panel, playing])
+  useEffect(() => { if (!overlay || !playing || panel || countdown !== null) return; const timeout = window.setTimeout(() => setOverlay(false), 5_000); return () => clearTimeout(timeout) }, [controlActivity, countdown, overlay, panel, playing])
   useEffect(() => { if (panel) window.setTimeout(() => setFocus("PLAYER_MODAL_FIRST"), 0) }, [panel])
   useEffect(() => {
     if (panel !== "diagnostics" || !engineRef.current) return
@@ -326,7 +457,12 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     update(); const interval = window.setInterval(update, 1_000); return () => window.clearInterval(interval)
   }, [panel])
   useEffect(() => { if (error) window.setTimeout(() => setFocus("PLAYER_ERROR_BACK"), 0) }, [error])
-  useEffect(() => { if (overlay && !error && !panel) window.setTimeout(() => setFocus("PLAYER_PLAY"), 0) }, [error, overlay, panel])
+  useEffect(() => { if (overlay && !error && !panel) window.setTimeout(() => setFocus(overlayFocusRef.current === "timeline" ? "PLAYER_TIMELINE" : "PLAYER_AUDIO"), 0) }, [error, overlay, panel])
+  useEffect(() => {
+    if (!cacheWarning) return
+    const timeout = window.setTimeout(() => setCacheWarning(""), 10_000)
+    return () => window.clearTimeout(timeout)
+  }, [cacheWarning])
 
   const chooseTrack = (track: TrackDescriptor) => {
     const saved = storage.getTrackState() as TrackState
@@ -362,6 +498,9 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     })
   }
   const percent = duration > 0 ? Math.min(100, time / duration * 100) : 0
+  const displayedBufferRanges = settings.cacheTimelineDisplay === "network-cache" && cacheStatus?.sourceBytes
+    ? cacheStatus.timeRanges ?? []
+    : bufferedRanges
   const video = mediaContainer?.mediaInfo?.video
   const viewport = videoViewport(video?.width || 1920, video?.height || 1080)
 
@@ -369,11 +508,12 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     {engineName === "FFmpeg + Samsung WASM Player" ? <video id="wasm-video" className="video-surface" /> : <object id="av-player" className="video-surface" type="application/avplayer" aria-label="Video playback surface" />}
     <canvas ref={assCanvasRef} className={`ass-canvas ${subtitleRenderer === "libass" ? "active" : ""}`} style={{ left: viewport.x, top: viewport.y, width: viewport.width, height: viewport.height }} />
     {subtitleRenderer === "text" && subtitle && <div className="subtitle" style={{ fontSize: `${Math.round(42 * settings.subtitleFontScale / 100)}px`, bottom: `${settings.subtitleBottomPercent}%` }}>{subtitle}</div>}
-    {buffering !== null && <div className="player-state"><div className="spinner" /><strong>Buffering {buffering}%</strong></div>}
+    {buffering !== null && <div className="player-state" aria-label="Buffering"><div className="spinner" /></div>}
+    {cacheWarning && !error && <div className="player-cache-warning"><strong>Cache warning</strong><span>{cacheWarning}</span></div>}
     {error && <div className="player-error"><h2>Unable to play this file</h2><p>{error}</p><Focusable focusKey="PLAYER_ERROR_BACK" onEnter={exit}>Back to episodes</Focusable></div>}
-    {overlay && !error && <div className="player-overlay"><div className="player-top"><div><strong>{source.media.title?.userPreferred || source.media.title?.english || source.media.title?.romaji}</strong><small>{source.episode.displayTitle} · {source.episode.episodeTitle}</small></div><Focusable onEnter={exit}>✕ Close</Focusable></div>
-      <div className="player-bottom"><div className="timeline">{engine?.exactBufferedRanges && bufferedRanges.map(range => <i key={`${range.start}-${range.end}`} className="timeline-buffered" style={{ left: `${range.start / duration * 100}%`, width: `${(range.end - range.start) / duration * 100}%` }} />)}<div className="timeline-fill" style={{ width: `${percent}%` }} /></div><div className="time-row"><span>{formatTime(time)}</span><span>{formatTime(duration)}</span></div>
-        <div className="player-actions"><Focusable onEnter={() => seek(-settings.seekStepSeconds)}>↶ {settings.seekStepSeconds}s</Focusable><Focusable focusKey="PLAYER_PLAY" className="play-control" onEnter={togglePlay}>{playing ? "Ⅱ" : "▶"}</Focusable><Focusable onEnter={() => seek(settings.seekStepSeconds)}>{settings.seekStepSeconds}s ↷</Focusable><Focusable onEnter={() => setPanel("audio")}>♫ Audio</Focusable><Focusable onEnter={() => setPanel("subtitle")}>CC Subtitles</Focusable><Focusable onEnter={() => setPanel("episodes")}>☷ Episodes</Focusable><Focusable onEnter={() => setPanel("diagnostics")}>ⓘ Stream</Focusable></div>
+    {overlay && !error && <div className="player-overlay"><div className="player-top"><div><strong>{source.media.title?.userPreferred || source.media.title?.english || source.media.title?.romaji}</strong><small>{source.episode.displayTitle} · {source.episode.episodeTitle}</small></div></div>
+      <div className="player-bottom"><Focusable focusKey="PLAYER_TIMELINE" className="timeline-control" label="Seek timeline and play or pause" onEnter={togglePlay} onArrowPress={timelineArrow}><div className="timeline-with-state"><span className="timeline-play-state">{playing ? "Ⅱ" : "▶"}</span><div className="timeline">{engine?.exactBufferedRanges && displayedBufferRanges.map(range => <i key={`${range.start}-${range.end}`} className="timeline-buffered" style={{ left: `${range.start / duration * 100}%`, width: `${(range.end - range.start) / duration * 100}%` }} />)}<div className="timeline-fill" style={{ width: `${percent}%` }} /></div></div><div className="time-row"><span>{formatTime(time)}</span><span>{formatTime(duration)}</span></div></Focusable>
+        <div className="player-actions"><Focusable focusKey="PLAYER_AUDIO" onArrowPress={actionArrow} onEnter={() => setPanel("audio")}>♫ Audio</Focusable><Focusable onArrowPress={actionArrow} onEnter={() => setPanel("subtitle")}>CC Subtitles</Focusable><Focusable onArrowPress={actionArrow} onEnter={() => setPanel("episodes")}>☷ Episodes</Focusable><Focusable onArrowPress={actionArrow} onEnter={() => setPanel("diagnostics")}>ⓘ Stream</Focusable></div>
       </div></div>}
     {countdown !== null && <div className="next-countdown"><strong>Next episode in {countdown}</strong><div><Focusable onEnter={() => setCountdown(null)}>Cancel</Focusable><Focusable className="primary" onEnter={playNext}>Play now</Focusable></div></div>}
     {panel && <FocusBoundary><div className="modal-backdrop"><div className="track-panel"><h2>{panel === "audio" ? "Audio tracks" : panel === "subtitle" ? "Subtitles" : panel === "subtitleAppearance" ? "Subtitle appearance" : panel === "playbackSettings" ? "Playback buffering" : panel === "diagnostics" ? "Stream diagnostics" : "Episodes"}</h2>
@@ -396,7 +536,7 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         <Diagnostic label="Source bitrate" value={video?.bitrate ? formatBitrate(video.bitrate) : "Unknown"} /><Diagnostic label="File size" value={mediaContainer?.mediaInfo?.size ? formatBytes(mediaContainer.mediaInfo.size) : "Unknown"} />
         <Diagnostic label="Audio" value={mediaContainer?.mediaInfo?.audios?.map(audio => `${audio.codec.toUpperCase()} ${audio.channels}ch ${audio.language || ""}`).join(", ") || "Unknown"} /><Diagnostic label="Subtitle renderer" value={subtitleRenderer} /><Diagnostic label="Subtitle status" value={subtitleStatus} />
         <Diagnostic label="Available / total RAM" value={`${formatOptionalBytes(resources.availableMemoryBytes)} / ${formatOptionalBytes(resources.totalMemoryBytes)}`} /><Diagnostic label="Available / total storage" value={`${formatOptionalBytes(resources.availableStorageBytes)} / ${formatOptionalBytes(resources.totalStorageBytes)}`} />
-        <Diagnostic label="Experimental cache" value={`${formatBytes(cachePolicy.hotRamBytes)} active hot RAM · disk tier not enabled`} />
+        <Diagnostic label="Experimental cache" value={`${formatBytes(cachePolicy.diskBytes)} temporary disk · ${formatBytes(cachePolicy.hotRamBytes)} adaptive RAM · ${cachePolicy.forwardPercent}% forward`} />
       </dl><Focusable focusKey="PLAYER_MODAL_FIRST" onEnter={() => setPanel("playbackSettings")}>Playback buffering settings<small>Initial, recovery, and timeout thresholds</small></Focusable><Focusable disabled={testingNetwork} onEnter={testConnection}>{testingNetwork ? "Testing connection…" : "Test TV-to-server speed"}</Focusable></div>
       : panel === "episodes" ? source.queue.map((episode, index) => <Focusable focusKey={index === 0 ? "PLAYER_MODAL_FIRST" : undefined} key={`${episode.type}-${episode.episodeNumber}`} disabled={!episode.localFile} onEnter={() => void openEpisode(episode)}>{episode.displayTitle}<small>{episode.localFile ? episode.episodeTitle : "Unavailable on server"}</small></Focusable>)
       : tracks.filter(track => track.type === (panel === "audio" ? "AUDIO" : "TEXT")).map((track, index) => <Focusable focusKey={panel === "audio" && index === 0 ? "PLAYER_MODAL_FIRST" : undefined} key={`${track.source ?? "avplay"}-${track.type}-${track.index}`} onEnter={() => chooseTrack(track)}>{track.title}<small>{track.language}{track.codec ? ` · ${track.codec}` : ""}</small></Focusable>)}
@@ -414,3 +554,10 @@ function formatBitrate(bitsPerSecond: number) { return bitsPerSecond >= 1_000_00
 function formatBytes(bytes: number) { return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB` }
 function formatOptionalBytes(bytes: number | null) { return bytes === null ? "Not reported" : formatBytes(bytes) }
 function formatVideo(container: MediaContainer | null) { const video = container?.mediaInfo?.video; return video ? `${video.codec.toUpperCase()} · ${video.width}×${video.height} · ${video.pixFmt}` : "Unknown" }
+function sameRanges(left: Array<{ start: number; end: number }>, right: Array<{ start: number; end: number }>) { return left.length === right.length && left.every((range, index) => Math.abs(range.start - right[index].start) < 0.05 && Math.abs(range.end - right[index].end) < 0.05) }
+function sameCacheStatus(left: CacheStatus | null, right: CacheStatus | null) {
+  return left?.usedBytes === right?.usedBytes
+    && left?.capacityBytes === right?.capacityBytes
+    && sameRanges(left?.byteRanges ?? [], right?.byteRanges ?? [])
+    && sameRanges(left?.timeRanges ?? [], right?.timeRanges ?? [])
+}

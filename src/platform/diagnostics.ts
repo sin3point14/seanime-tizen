@@ -23,7 +23,7 @@ export function diagnostic(event: string, data?: DiagnosticData, level: Diagnost
   const entry: DiagnosticEntry = { at: new Date().toISOString(), level, event, data: sanitize(data) }
   console[level](`[SeanimeTV] ${event}`, entry.data ?? "")
   queue.push(entry)
-  if (queue.length > 300) queue.shift()
+  if (queue.length > 3000) queue.shift()
   scheduleFlush()
 }
 

@@ -19,5 +19,5 @@ it("rejects unverified containers, codecs, and DTS audio", () => {
   expect(wasmEligibility(media("avi", "h264")).eligible).toBe(false)
   expect(wasmEligibility(media("mkv", "av1")).eligible).toBe(false)
   expect(wasmEligibility(media("mkv", "hevc", "dts")).eligible).toBe(false)
-  expect(DEFAULT_SETTINGS.playbackBackend).toBe("avplay")
+  expect(DEFAULT_SETTINGS.playbackBackend).toBe("wasm-experimental")
 })

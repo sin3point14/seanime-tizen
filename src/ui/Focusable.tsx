@@ -9,13 +9,15 @@ interface Props extends PropsWithChildren {
   className?: string
   style?: CSSProperties
   label?: string
+  onArrowPress?: (direction: string) => boolean
 }
 
-export function Focusable({ children, onEnter, onFocus, disabled, focusKey, className = "", style, label }: Props) {
+export function Focusable({ children, onEnter, onFocus, onArrowPress, disabled, focusKey, className = "", style, label }: Props) {
   const { ref, focused } = useFocusable({
     focusKey,
     focusable: !disabled,
     onEnterPress: onEnter,
+    onArrowPress: direction => onArrowPress?.(direction) ?? true,
     onFocus: () => {
       onFocus?.()
       // Smooth scroll animations repeatedly repaint large TV backdrops and

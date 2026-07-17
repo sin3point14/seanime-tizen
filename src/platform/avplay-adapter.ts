@@ -50,7 +50,7 @@ export class AvPlayAdapter implements PlaybackEngine {
   pause() { this.avplay.pause() }
   seek(milliseconds: number) { return new Promise<void>((resolve, reject) => this.avplay.seekTo(Math.max(0, milliseconds), resolve, reject)) }
   seekBy(milliseconds: number) { milliseconds >= 0 ? this.avplay.jumpForward(milliseconds) : this.avplay.jumpBackward(Math.abs(milliseconds)) }
-  stop() { try { this.avplay.stop() } catch { /* already stopped */ } try { this.avplay.close() } catch { /* already closed */ } this.opened = false }
+  async stop() { try { this.avplay.stop() } catch { /* already stopped */ } try { this.avplay.close() } catch { /* already closed */ } this.opened = false }
   get duration() { return this.avplay.getDuration() }
   get currentTime() { return this.avplay.getCurrentTime() }
   get state() { return this.avplay.getState() }
@@ -77,6 +77,7 @@ export class AvPlayAdapter implements PlaybackEngine {
     } catch { return null }
   }
   getBufferedRanges() { return [] }
+  getCacheStatus() { return null }
   selectTrack(type: TrackType, index: number) { this.avplay.setSelectTrack(type, index) }
   setSubtitlesEnabled(enabled: boolean) { this.avplay.setSilentSubtitle(!enabled) }
 }

@@ -1,59 +1,25 @@
-# Seanime TV for Samsung Tizen
+# Seanime TV
 
-A remote-first Seanime client targeting 2025 Samsung televisions running Tizen 9.
+A remote-first Seanime anime client for Samsung televisions running Tizen 9.
 
-## Playback features
+## Features
 
-- Samsung AVPlay direct playback for locally hosted anime, including H.264/H.265 MKV when supported by the television
-- Audio/subtitle track persistence, Seanime resume and progress tracking, and automatic next episode
-- Real ASS/SSA rendering through libass/JASSUB with embedded font attachments, plus SRT/VTT fallback
-- Immediate cumulative remote seeking, manual AVPlay startup/recovery thresholds, and stream diagnostics
-- Search history and a remote-navigable settings interface
-- An opt-in FFmpeg 4.3.1/Samsung WASM Player backend with ranged reads, a bounded LRU byte cache, eligibility checks, diagnostics, and automatic AVPlay fallback
+- Browse and search the Seanime library, including recent searches and large episode lists.
+- Direct-stream local H.264/H.265 media with audio and subtitle track selection.
+- Resume and progress tracking through Seanime, track persistence, and automatic next episode.
+- Remote-native seeking, playback diagnostics, configurable buffering, and temporary RAM/disk caching.
+- Samsung AVPlay fallback when the custom player or media format is unsupported.
 
-The experimental backend is compiled with Samsung's modified Emscripten 1.39.4.7 SDK. It is intentionally opt-in and returns to AVPlay if FFmpeg demuxing or Samsung hardware-track initialization fails. The app never displays an estimated buffered timeline; the experimental byte cache currently reports bandwidth but does not claim byte ranges as playable timeline ranges.
+## Standout playback support
 
-## Development
+**ASS subtitles:** ASS/SSA tracks are rendered with JASSUB/libass, including authored fonts, sizes, positioning, signs, and karaoke. Embedded font attachments are loaded when Seanime exposes them. A simpler text renderer remains available.
 
-```powershell
-npm install
-npm test
-npm run build
-```
+**Custom WASM player:** FFmpeg demuxes containers such as MKV in a worker while Samsung's Elementary Media Stream Source performs hardware audio/video decoding. It adds ranged reads, multiple audio tracks, seek-aware temporary caching, packet-mapped cache visualization, and automatic AVPlay fallback. It exists because AVPlay does not expose a controllable retained network cache or reliable container-level diagnostics.
 
-Playback requires a Samsung TV. Browsing screens can be reviewed through Vite in a desktop browser.
+The defaults are tested on a Samsung S90F (`QA55S90F`): the WASM player, a 300-second/1 GiB temporary cache with 80% allocated forward, authored ASS styles, and the network-cache timeline.
 
-## Samsung TV deployment
+## Install and build
 
-Install the TV and Certificate extensions in Tizen Studio and create a Samsung certificate profile containing the TV DUID. Certificate material must remain outside this repository.
+Release WGTs are signed for the test television's DUID. Other televisions must rebuild or re-sign the app with a Samsung certificate containing their own DUID. See [BUILDING.md](BUILDING.md).
 
-```powershell
-$env:TIZEN_CERT_PROFILE = "SeanimeTV"
-$env:TIZEN_DEVICE = "TV_IP_ADDRESS:26101"
-npm run tizen:deploy
-```
-
-The existing deployment script builds Vite, creates a signed WGT, installs it, and launches the application. This manifest intentionally requires Tizen 9.0.
-
-## Experimental native backend prerequisites
-
-- Tizen Studio with the Samsung TV extensions
-- Samsung's modified Emscripten SDK 1.39.4.7
-- FFmpeg/libavformat built without GPL or nonfree components
-- Required flags: `-s ENVIRONMENT_MAY_BE_TIZEN -pthread -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=1`
-
-Run `npm run wasm:build` to rebuild the native artifacts. The current implementation uses synchronous ranged browser fetches from a demux pthread, FFmpeg custom AVIO, a bounded hot-RAM LRU cache, a three-second Samsung packet queue, and Elementary Media Stream Source hardware decoding. A persistent sparse disk tier remains future work; the UI does not mislabel the RAM cache as persistent storage.
-
-## Development diagnostics
-
-Diagnostics are compile-time disabled in normal builds. To run a temporary laptop receiver and make a diagnostic package automatically open one episode:
-
-```powershell
-node scripts/diagnostic-server.mjs
-$env:VITE_DIAGNOSTICS = "true"
-$env:VITE_DIAGNOSTIC_ENDPOINT = "http://LAPTOP_LAN_IP:8765/log"
-$env:VITE_DIAGNOSTIC_AUTOPLAY = "MEDIA_ID:EPISODE_NUMBER"
-npm run tizen:deploy
-```
-
-Events are written to the ignored `diagnostics/tv.jsonl` file. Clear those three environment variables before producing a release package.
+This project was built with help from [OpenAI Codex](https://openai.com/codex/).

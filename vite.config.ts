@@ -15,6 +15,8 @@ export default defineConfig(({ mode }) => {
       __DIAGNOSTICS__: JSON.stringify(diagnostics),
       __DIAGNOSTIC_ENDPOINT__: JSON.stringify(diagnostics ? env.VITE_DIAGNOSTIC_ENDPOINT || "" : ""),
       __DIAGNOSTIC_AUTOPLAY__: JSON.stringify(diagnostics ? env.VITE_DIAGNOSTIC_AUTOPLAY || "" : ""),
+      __DIAGNOSTIC_AUTO_SEEK_SECONDS__: JSON.stringify(diagnostics ? Number(env.VITE_DIAGNOSTIC_AUTO_SEEK_SECONDS || 0) : 0),
+      __DIAGNOSTIC_REOPEN_CYCLES__: JSON.stringify(diagnostics ? Number(env.VITE_DIAGNOSTIC_REOPEN_CYCLES || 0) : 0),
     },
     build: { target: "es2017", outDir: "dist", emptyOutDir: true },
   }
