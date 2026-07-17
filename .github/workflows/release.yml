@@ -35,7 +35,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y default-jre libwebkit2gtk-4.0-37 libglu1-mesa libpng16-16 libjpeg-turbo8 zip
           curl --fail --location --retry 3 \
-            https://download.tizen.org/sdk/Installer/tizen-studio_6.1/web-cli_Tizen_Studio_6.1_ubuntu-64.bin \
+            https://download.tizen.org/sdk/Installer/tizen-studio_6.0/web-cli_Tizen_Studio_6.0_ubuntu-64.bin \
             --output /tmp/tizen-installer.bin
           chmod +x /tmp/tizen-installer.bin
           /tmp/tizen-installer.bin --accept-license "$HOME/tizen-studio"
