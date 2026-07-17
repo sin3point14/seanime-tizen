@@ -187,6 +187,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
     url_ = std::move(url); file_size_ = file_size; video_mime_ = std::move(video_mime);
     audio_mime_ = std::move(audio_mime); element_id_ = std::move(element_id);
     requested_audio_index_ = audio_index; hot_cache_mib_ = hot_cache_mib;
+    Emit("log", file_size, "native open requested");
     stopped_.store(false); state_.store(1);
     demux_thread_ = std::thread([this] { Demux(); });
   }
@@ -214,6 +215,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
 
   void OnSourceClosed() override {
     if (!source_ || stopped_.load()) return;
+    Emit("log", duration_, "media source closed; configuring tracks");
     source_->SetDuration(Seconds{duration_});
     if (video_stream_ >= 0) {
       auto* parameters = format_->streams[video_stream_]->codecpar;
@@ -225,7 +227,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
     }
     if (audio_stream_ >= 0) {
       auto* parameters = format_->streams[audio_stream_]->codecpar;
-      ElementaryAudioTrackConfig config(audio_mime_, Extradata(parameters), SampleFormat::kUnknown,
+      ElementaryAudioTrackConfig config(audio_mime_, Extradata(parameters), SampleFormat::kPlanarF32,
                                          Layout(parameters->channels), parameters->sample_rate);
       auto result = source_->AddTrack(config);
       if (!result) { Emit("error", 0, "Samsung rejected the audio track configuration."); return; }
@@ -233,6 +235,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
     }
     source_->Open([](OperationResult result) { if (result != OperationResult::kSuccess) Emit("error", 0, "Samsung could not open the elementary media source."); });
   }
+  void OnSourceOpen() override { Emit("log", 0, "media source open"); }
   void OnPlaybackPositionChanged(Seconds time) override {
     current_time_.store(time.count()); Emit("time", time.count() * 1000.0);
     target_time_.store(time.count() + 3.0); wake_.notify_one();
@@ -264,15 +267,20 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
   static void SetupMain(Player* self) { self->Setup(); }
   void Setup() {
     if (stopped_.load()) return;
+    Emit("log", 0, "creating HTML media element");
     media_element_ = std::make_unique<HTMLMediaElement>(element_id_.c_str());
     if (!media_element_->IsValid()) { Emit("error", 0, "WASM video element is unavailable."); return; }
     media_element_->SetListener(this);
     source_ = std::make_unique<ElementaryMediaStreamSource>(samsung::wasm::EmssLatencyMode::kNormal, samsung::wasm::EmssRenderingMode::kMediaElement);
+    if (!source_->IsValid()) { Emit("error", 0, "Samsung elementary media source is unavailable."); return; }
     source_->SetListener(this);
-    media_element_->SetSrc(source_.get());
+    auto attached = media_element_->SetSrc(source_.get());
+    if (!attached) { Emit("error", static_cast<double>(attached.operation_result), "Samsung rejected the elementary media source attachment."); return; }
+    Emit("log", 0, "elementary media source attached");
   }
 
   void Demux() {
+    Emit("log", file_size_, "FFmpeg demux starting");
     reader_ = std::make_unique<RangeReader>(url_, file_size_, hot_cache_mib_);
     auto* buffer = static_cast<uint8_t*>(av_malloc(64 * 1024));
     avio_ = avio_alloc_context(buffer, 64 * 1024, 0, reader_.get(), ReadPacket, nullptr, SeekPacket);
@@ -284,6 +292,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
     audio_stream_ = requested_audio_index_ >= 0 ? FindAudio(requested_audio_index_) : av_find_best_stream(format_, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (video_stream_ < 0) { Emit("error", 0, "FFmpeg found no playable video stream."); return; }
     duration_ = format_->duration > 0 ? format_->duration / static_cast<double>(AV_TIME_BASE) : 0;
+    Emit("log", duration_, "FFmpeg stream metadata ready");
     frame_rate_ = av_guess_frame_rate(format_, format_->streams[video_stream_], nullptr);
     target_time_.store(3.0);
     emscripten_async_run_in_main_runtime_thread(EM_FUNC_SIG_VI, SetupMain, this);
@@ -355,7 +364,7 @@ class Player final : public samsung::wasm::ElementaryMediaStreamSourceListener,
   std::unique_ptr<TrackSink> video_sink_, audio_sink_;
 };
 
-void TrackSink::OnTrackOpen() { open.store(true); owner->Wake(); }
+void TrackSink::OnTrackOpen() { open.store(true); Emit("log", session.load(), "elementary media track open"); owner->Wake(); }
 void TrackSink::OnSeek(Seconds time) { owner->RequestSeek(time.count()); }
 
 Player player;

@@ -3,12 +3,14 @@ import workerUrl from "jassub/dist/worker/worker.js?worker&url"
 import wasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url"
 import modernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url"
 import type { PlayerSettings } from "../domain/settings"
+import { diagnostic } from "./diagnostics"
 
 export class AssSubtitleRenderer {
   private renderer: JASSUB | null = null
   private frame: number | null = null
   private playing = false
   private lastRenderedAt = 0
+  private renderErrorReported = false
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -18,27 +20,35 @@ export class AssSubtitleRenderer {
   ) {}
 
   async load(content: string, fonts: Uint8Array[]) {
-    await this.destroy()
+    this.renderErrorReported = false
     const quality = qualityOptions(this.settings)
-    this.renderer = new JASSUB({
-      canvas: this.canvas,
-      subContent: content,
-      fonts,
-      queryFonts: false,
-      workerUrl,
-      wasmUrl,
-      modernWasmUrl,
-      prescaleFactor: quality.prescaleFactor,
-      prescaleHeightLimit: quality.maxHeight,
-      maxRenderHeight: quality.maxHeight,
-      libassMemoryLimit: quality.memoryLimit,
-      libassGlyphLimit: quality.glyphLimit,
-    })
-    await this.renderer.ready
+    diagnostic("subtitle.libass.construct", { contentBytes: content.length, fonts: fonts.length, workerUrl, wasmUrl, modernWasmUrl, quality })
+    if (this.renderer) {
+      await this.renderer.renderer.addFonts(fonts)
+      await this.renderer.renderer.setTrack(content)
+    } else {
+      this.renderer = new JASSUB({
+        canvas: this.canvas,
+        subContent: content,
+        fonts,
+        queryFonts: false,
+        workerUrl,
+        wasmUrl,
+        modernWasmUrl,
+        prescaleFactor: quality.prescaleFactor,
+        prescaleHeightLimit: quality.maxHeight,
+        maxRenderHeight: quality.maxHeight,
+        libassMemoryLimit: quality.memoryLimit,
+        libassGlyphLimit: quality.glyphLimit,
+      })
+      await this.renderer.ready
+    }
+    diagnostic("subtitle.libass.ready")
     this.applyAppearance()
     const size = this.getVideoSize()
     await this.renderer.resize(true, size.width, size.height)
     await this.renderAt(this.getTime(), true)
+    diagnostic("subtitle.libass.first-frame", { width: size.width, height: size.height, time: this.getTime() })
     if (this.playing) this.schedule()
   }
 
@@ -67,8 +77,6 @@ export class AssSubtitleRenderer {
     const current = this.renderer
     this.renderer = null
     if (current) await current.destroy().catch(() => undefined)
-    const context = this.canvas.getContext("2d")
-    context?.clearRect(0, 0, this.canvas.width, this.canvas.height)
   }
 
   private applyAppearance() {
@@ -99,7 +107,11 @@ export class AssSubtitleRenderer {
       mediaTime: Math.max(0, seconds),
       width: size.width,
       height: size.height,
-    }, repaint).catch(() => undefined)
+    }, repaint).catch(reason => {
+      if (this.renderErrorReported) return
+      this.renderErrorReported = true
+      diagnostic("subtitle.libass.render-error", { message: reason instanceof Error ? reason.message : String(reason) }, "error")
+    })
   }
 
   private cancelFrame() {

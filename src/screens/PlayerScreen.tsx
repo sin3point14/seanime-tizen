@@ -15,6 +15,7 @@ import { createPlaybackEngine } from "../platform/engine-factory"
 import type { PlaybackEngine, PlaybackEngineEvent } from "../platform/playback-engine"
 import { RemoteKey } from "../platform/remote"
 import { emptyResources, getSystemResources } from "../platform/system-info"
+import { diagnostic } from "../platform/diagnostics"
 import { Focusable } from "../ui/Focusable"
 
 type TrackState = { audio?: TrackPreference; subtitle?: TrackPreference; subtitlesOff?: boolean }
@@ -59,6 +60,7 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
   const playingRef = useRef(false)
   const assCanvasRef = useRef<HTMLCanvasElement>(null)
   const assRendererRef = useRef<AssSubtitleRenderer | null>(null)
+  const activeSubtitleTrackRef = useRef<TrackDescriptor | null>(null)
   const playbackGeneration = useRef(0)
   const { ref, focusKey } = useFocusable({ focusKey: "PLAYER", trackChildren: true })
   const tracks = useMemo(() => [...avTracks.filter(track => track.type !== "TEXT" || serverSubtitleTracks.length === 0), ...serverSubtitleTracks], [avTracks, serverSubtitleTracks])
@@ -90,16 +92,20 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
 
   const loadSubtitle = useCallback(async (track: TrackDescriptor, instance = engineRef.current) => {
     if (!track.url || !instance) return
+    activeSubtitleTrackRef.current = track
+    diagnostic("subtitle.load", { title: track.title, codec: track.codec, url: track.url, engine: instance.name, useLibass: settingsRef.current.subtitleUseAssStyles })
     setSubtitleStatus(`Loading ${track.title}…`)
     const content = await client.getExtractedSubtitle(track.url)
     const ass = track.codec?.toLocaleLowerCase().includes("ass") || track.codec?.toLocaleLowerCase().includes("ssa") || /^\s*\[Script Info\]/im.test(content)
+    diagnostic("subtitle.detected", { ass, contentBytes: content.length })
     instance.setSubtitlesEnabled(false)
     setNativeSubtitle("")
-    if (ass && assCanvasRef.current) {
+    if (ass && assCanvasRef.current && settingsRef.current.subtitleUseAssStyles) {
       const fallbackCues = parseSubtitleFile(content, "ass")
       const fontNames = mediaRef.current?.mediaInfo?.fonts ?? []
       const loaded = await Promise.all(fontNames.map(name => client.getExtractedAttachment(name).catch(() => null)))
       const fonts = loaded.filter((font): font is Uint8Array => font !== null)
+      diagnostic("subtitle.fonts-complete", { requested: fontNames.length, loaded: fonts.length, bytes: fonts.reduce((total, font) => total + font.byteLength, 0) })
       const renderer = assRendererRef.current ?? new AssSubtitleRenderer(
         assCanvasRef.current,
         () => seekTarget.current ?? (engineRef.current ? engineRef.current.currentTime / 1000 : currentRef.current.time),
@@ -116,8 +122,10 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         setSubtitleCues([])
         setSubtitleRenderer("libass")
         setSubtitleStatus(`libass active · ${fonts.length}/${fontNames.length} embedded fonts loaded`)
+        diagnostic("subtitle.renderer-active", { renderer: "libass", fonts: fonts.length })
         return
       } catch (reason) {
+        diagnostic("subtitle.libass-fallback", { message: reason instanceof Error ? reason.message : String(reason), cues: fallbackCues.length }, "error")
         await renderer.destroy()
         assRendererRef.current = null
         if (!fallbackCues.length) throw reason
@@ -127,13 +135,13 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
         return
       }
     }
-    await assRendererRef.current?.destroy()
-    assRendererRef.current = null
+    assRendererRef.current?.setPlaying(false)
     const cues = parseSubtitleFile(content, track.codec)
     if (!cues.length) throw new Error("The selected subtitle track contains no renderable text.")
     setSubtitleCues(cues)
     setSubtitleRenderer("text")
     setSubtitleStatus(`Text renderer active · ${cues.length} cues`)
+    diagnostic("subtitle.renderer-active", { renderer: "text", cues: cues.length, sourceWasAss: ass })
   }, [client])
 
   useEffect(() => {
@@ -142,7 +150,6 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     let active: PlaybackEngine | null = null
     let unsubscribe: (() => void) | null = null
     setError(""); setBuffering(null); setBufferedRanges([]); setTime(0); setDuration(0); setMediaContainer(null); setServerSubtitleTracks([]); serverSubtitleTracksRef.current = []; setSubtitleCues([]); setNativeSubtitle(""); setSubtitleRenderer("off"); setSubtitleStatus("No subtitle track loaded"); setFallbackReason(null)
-    void assRendererRef.current?.destroy(); assRendererRef.current = null
 
     const attach = (instance: PlaybackEngine) => {
       unsubscribe?.()
@@ -161,6 +168,7 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       setEngineName(instance.name)
       unsubscribe = instance.subscribe((event: PlaybackEngineEvent) => {
         if (disposed || generation !== playbackGeneration.current) return
+        if (event.type !== "time") diagnostic("player.event", { engine: instance.name, ...event }, event.type === "error" ? "error" : "info")
         if (event.type === "time" && seekTarget.current === null) {
           const seconds = event.milliseconds / 1000
           setTime(seconds); currentRef.current.time = seconds
@@ -187,11 +195,14 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       }))
       serverSubtitleTracksRef.current = extracted; setServerSubtitleTracks(extracted)
       const selection = createPlaybackEngine(settingsRef.current, container, resourcesRef.current)
+      diagnostic("player.engine-selected", { requested: settingsRef.current.playbackBackend, selected: selection.engine.name, fallback: selection.fallbackReason, mediaInfo: container?.mediaInfo })
       setFallbackReason(selection.fallbackReason)
       attach(selection.engine)
       const prepareEngine = async (instance: PlaybackEngine, resumeAt: number) => {
+        diagnostic("player.prepare-start", { engine: instance.name, resumeAt })
         instance.load(source.url, settingsRef.current)
         await instance.prepare()
+        diagnostic("player.prepare-ready", { engine: instance.name, duration: instance.duration })
         const seconds = instance.duration / 1000
         setDuration(seconds); currentRef.current.duration = seconds
         if (resumeAt > 0) await instance.seek(resumeAt * 1000)
@@ -201,6 +212,7 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       }
       try { await prepareEngine(selection.engine, source.resumePosition) }
       catch (reason) {
+        diagnostic("player.prepare-failed", { engine: selection.engine.name, message: reason instanceof Error ? reason.message : String(reason), stack: reason instanceof Error ? reason.stack : undefined }, "error")
         if (selection.engine.name !== "FFmpeg + Samsung WASM Player") throw reason
         const position = Math.max(source.resumePosition, currentRef.current.time)
         selection.engine.stop()
@@ -231,11 +243,12 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       unsubscribe?.(); void flush(); void client.cancelTracking().catch(() => undefined); active?.stop()
       engineRef.current = null
       seekQueueRef.current?.reset(); seekQueueRef.current = null
-      void assRendererRef.current?.destroy(); assRendererRef.current = null
     }
   // Buffer settings apply to the next playback session; changing subtitle appearance does not restart video.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyTracks, client, flush, loadSubtitle, source, settings.playbackBackend])
+
+  useEffect(() => () => { void assRendererRef.current?.destroy(); assRendererRef.current = null }, [])
 
   useEffect(() => { currentRef.current = { time, duration } }, [time, duration])
   useEffect(() => { playingRef.current = playing; assRendererRef.current?.setPlaying(playing) }, [playing])
@@ -323,18 +336,31 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
       setSubtitleRenderer("off")
       setSubtitleStatus(`Subtitle load failed · ${reason instanceof Error ? reason.message : String(reason)}`)
     })
-    else { engineRef.current?.selectTrack(track.type, track.index); if (track.type === "TEXT") { void assRendererRef.current?.destroy(); assRendererRef.current = null; setSubtitleCues([]); engineRef.current?.setSubtitlesEnabled(true); setSubtitleRenderer("avplay") } }
+    else { engineRef.current?.selectTrack(track.type, track.index); if (track.type === "TEXT") { setSubtitleCues([]); engineRef.current?.setSubtitlesEnabled(true); setSubtitleRenderer("avplay") } }
     setPanel(null)
   }
   const subtitlesOff = () => {
-    engineRef.current?.setSubtitlesEnabled(false); setSubtitleCues([]); setNativeSubtitle(""); void assRendererRef.current?.destroy(); assRendererRef.current = null; setSubtitleRenderer("off"); setSubtitleStatus("Subtitles disabled")
+    activeSubtitleTrackRef.current = null
+    engineRef.current?.setSubtitlesEnabled(false); setSubtitleCues([]); setNativeSubtitle(""); setSubtitleRenderer("off"); setSubtitleStatus("Subtitles disabled")
     storage.setTrackState({ ...(storage.getTrackState() as TrackState), subtitlesOff: true }); setPanel(null)
   }
   const testConnection = () => {
     setTestingNetwork(true); setNetworkTest("Testing…")
     void client.measureMediaSpeed(source.url).then(result => { setNetworkTest(`${result.megabitsPerSecond.toFixed(1)} Mbps`); setTestingNetwork(false) }, reason => { setNetworkTest(reason instanceof Error ? reason.message : String(reason)); setTestingNetwork(false) })
   }
-  const updateSettings = (partial: Partial<PlayerSettings>) => onSettings({ ...settings, ...partial })
+  const updateSettings = (partial: Partial<PlayerSettings>) => {
+    const next = { ...settingsRef.current, ...partial }
+    settingsRef.current = next
+    onSettings(next)
+  }
+  const setAssRenderer = (enabled: boolean) => {
+    updateSettings({ subtitleUseAssStyles: enabled })
+    const track = activeSubtitleTrackRef.current
+    if (track) void loadSubtitle(track).catch(reason => {
+      setSubtitleRenderer("off")
+      setSubtitleStatus(`Subtitle reload failed · ${reason instanceof Error ? reason.message : String(reason)}`)
+    })
+  }
   const percent = duration > 0 ? Math.min(100, time / duration * 100) : 0
   const video = mediaContainer?.mediaInfo?.video
   const viewport = videoViewport(video?.width || 1920, video?.height || 1080)
@@ -353,7 +379,7 @@ export function PlayerScreen({ initialSource, client, settings, onSettings, onEx
     {panel && <FocusBoundary><div className="modal-backdrop"><div className="track-panel"><h2>{panel === "audio" ? "Audio tracks" : panel === "subtitle" ? "Subtitles" : panel === "subtitleAppearance" ? "Subtitle appearance" : panel === "playbackSettings" ? "Playback buffering" : panel === "diagnostics" ? "Stream diagnostics" : "Episodes"}</h2>
       {panel === "subtitle" && <><Focusable focusKey="PLAYER_MODAL_FIRST" onEnter={subtitlesOff}>Off</Focusable><Focusable onEnter={() => setPanel("subtitleAppearance")}>Appearance<small>ASS style, size, position, and renderer quality</small></Focusable></>}
       {panel === "subtitleAppearance" ? <div className="appearance-panel">
-        <Focusable focusKey="PLAYER_MODAL_FIRST" className={settings.subtitleUseAssStyles ? "selected" : ""} onEnter={() => updateSettings({ subtitleUseAssStyles: !settings.subtitleUseAssStyles })}>Authored ASS styles: {settings.subtitleUseAssStyles ? "On" : "Off"}<small>Exact fonts, positioning, signs, and karaoke when enabled.</small></Focusable>
+        <Focusable focusKey="PLAYER_MODAL_FIRST" className={settings.subtitleUseAssStyles ? "selected" : ""} onEnter={() => setAssRenderer(!settings.subtitleUseAssStyles)}>ASS/libass renderer: {settings.subtitleUseAssStyles ? "On" : "Off"}<small>On preserves authored fonts, positioning, signs, and karaoke. Off uses simple TV text subtitles.</small></Focusable>
         <Stepper label="Override scale" value={settings.subtitleFontScale} unit="%" minimum={50} maximum={200} step={10} disabled={settings.subtitleUseAssStyles} onChange={value => updateSettings({ subtitleFontScale: value })} />
         <Stepper label="Bottom offset" value={settings.subtitleBottomPercent} unit="%" minimum={0} maximum={30} step={1} disabled={settings.subtitleUseAssStyles} onChange={value => updateSettings({ subtitleBottomPercent: value })} />
         {(["performance", "balanced", "quality"] as const).map(quality => <Focusable key={quality} className={settings.subtitleQuality === quality ? "selected" : ""} onEnter={() => updateSettings({ subtitleQuality: quality })}>{quality}</Focusable>)}

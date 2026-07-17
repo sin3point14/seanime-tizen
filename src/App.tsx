@@ -1,10 +1,11 @@
 import { init } from "@noriginmedia/norigin-spatial-navigation"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { SeanimeClient } from "./api/seanime-client"
 import type { PlayerSettings } from "./domain/settings"
 import type { LibraryCollection, PlaybackSource } from "./domain/types"
 import { storage, type ServerConfig } from "./lib/storage"
 import { registerMediaKeys, RemoteKey } from "./platform/remote"
+import { diagnostic } from "./platform/diagnostics"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { DetailsScreen } from "./screens/DetailsScreen"
 import { HomeScreen } from "./screens/HomeScreen"
@@ -32,6 +33,7 @@ export default function App() {
   const [error, setError] = useState("")
   const [refreshing, setRefreshing] = useState(false)
   const [checking, setChecking] = useState(Boolean(initialConfig))
+  const diagnosticAutoplayStarted = useRef(false)
 
   const loadLibrary = useCallback(async (refresh = false) => {
     if (!client) return
@@ -46,6 +48,24 @@ export default function App() {
     if (!client || connected) return
     client.validate().then(() => loadLibrary()).catch(reason => { setError(reason instanceof Error ? reason.message : String(reason)); setChecking(false); setConnected(false) })
   }, [client, connected, loadLibrary])
+
+  useEffect(() => {
+    if (typeof __DIAGNOSTICS__ === "undefined" || !__DIAGNOSTICS__ || typeof __DIAGNOSTIC_AUTOPLAY__ === "undefined" || !__DIAGNOSTIC_AUTOPLAY__ || !client || !connected || diagnosticAutoplayStarted.current) return
+    const [rawMediaId, rawEpisode] = __DIAGNOSTIC_AUTOPLAY__.split(":")
+    const mediaId = Number(rawMediaId)
+    const episodeNumber = Number(rawEpisode)
+    if (!Number.isFinite(mediaId) || !Number.isFinite(episodeNumber)) return
+    diagnosticAutoplayStarted.current = true
+    diagnostic("autoplay.start", { mediaId, episodeNumber })
+    void client.getAnimeEntry(mediaId).then(entry => {
+      const episodes = (entry.episodes ?? []).filter(episode => episode.type === "main" && episode.localFile)
+      const episode = episodes.find(item => item.episodeNumber === episodeNumber)
+      if (!entry.media || !episode?.localFile) throw new Error(`Episode ${episodeNumber} is unavailable.`)
+      setSettings(current => ({ ...current, playbackBackend: "wasm-experimental" }))
+      setSource({ mediaId, media: entry.media, episode, localFile: episode.localFile, url: client.mediaUrl(episode.localFile.path), resumePosition: 0, queue: episodes })
+      diagnostic("autoplay.ready", { mediaId, episodeNumber, file: episode.localFile.name })
+    }).catch(reason => diagnostic("autoplay.error", { message: reason instanceof Error ? reason.message : String(reason) }, "error"))
+  }, [client, connected])
 
   useEffect(() => {
     const onBack = (event: KeyboardEvent) => {

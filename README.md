@@ -43,3 +43,17 @@ The existing deployment script builds Vite, creates a signed WGT, installs it, a
 - Required flags: `-s ENVIRONMENT_MAY_BE_TIZEN -pthread -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=1`
 
 Run `npm run wasm:build` to rebuild the native artifacts. The current implementation uses synchronous ranged browser fetches from a demux pthread, FFmpeg custom AVIO, a bounded hot-RAM LRU cache, a three-second Samsung packet queue, and Elementary Media Stream Source hardware decoding. A persistent sparse disk tier remains future work; the UI does not mislabel the RAM cache as persistent storage.
+
+## Development diagnostics
+
+Diagnostics are compile-time disabled in normal builds. To run a temporary laptop receiver and make a diagnostic package automatically open one episode:
+
+```powershell
+node scripts/diagnostic-server.mjs
+$env:VITE_DIAGNOSTICS = "true"
+$env:VITE_DIAGNOSTIC_ENDPOINT = "http://LAPTOP_LAN_IP:8765/log"
+$env:VITE_DIAGNOSTIC_AUTOPLAY = "MEDIA_ID:EPISODE_NUMBER"
+npm run tizen:deploy
+```
+
+Events are written to the ignored `diagnostics/tv.jsonl` file. Clear those three environment variables before producing a release package.

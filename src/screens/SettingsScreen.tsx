@@ -57,7 +57,7 @@ export function SettingsScreen({ config, settings, onSettings, onReconnect, onDi
       <div className="resource-summary"><strong>TV resources reported by Tizen</strong><small>RAM: {resource(resources.availableMemoryBytes)} available / {resource(resources.totalMemoryBytes)} total</small><small>Storage: {resource(resources.availableStorageBytes)} available / {resource(resources.totalStorageBytes)} total</small></div>
       <h2>Server</h2><div className="server-card"><span className="connection-dot">● Connected</span><strong>{config.url}</strong><small>{config.passwordHash ? "Password protected" : "No password"}</small></div>
       <Focusable onEnter={onReconnect}>Reconnect</Focusable><Focusable className="danger" onEnter={onDisconnect}>Disconnect and clear data</Focusable>
-      <div className="about"><strong>Seanime TV</strong><small>Version 0.2.1 · Samsung Tizen 9</small><small>AVPlay plus opt-in FFmpeg/Samsung WASM Player</small></div>
+      <div className="about"><strong>Seanime TV</strong><small>Version 0.2.2 · Samsung Tizen 9</small><small>AVPlay plus opt-in FFmpeg/Samsung WASM Player</small></div>
     </section></div>
   </div>
 }

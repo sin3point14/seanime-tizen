@@ -20,6 +20,12 @@ cmd.exe /d /c $command
 if ($LASTEXITCODE -ne 0) { throw "Samsung WASM Player build failed." }
 $fetchWorker = Join-Path $Project "seanime-wasm-player.fetch.js"
 if (Test-Path -LiteralPath $fetchWorker) { Move-Item -LiteralPath $fetchWorker -Destination (Join-Path $Output "seanime-wasm-player.fetch.js") -Force }
-$unusedInitializer = Join-Path $Output "seanime-wasm-player.js.mem"
-if (Test-Path -LiteralPath $unusedInitializer) { Remove-Item -LiteralPath $unusedInitializer -Force }
+# Emscripten 1.39's fetch worker uses the obsolete Atomics.wake alias. Modern
+# Tizen WebKit exposes the standardized Atomics.notify name.
+Get-ChildItem -LiteralPath $Output -Filter "seanime-wasm-player*.js" | ForEach-Object {
+  $content = [System.IO.File]::ReadAllText($_.FullName)
+  if ($content.Contains("Atomics.wake")) {
+    [System.IO.File]::WriteAllText($_.FullName, $content.Replace("Atomics.wake", "Atomics.notify"), [System.Text.UTF8Encoding]::new($false))
+  }
+}
 Write-Output "Built Samsung WASM Player in $Output"

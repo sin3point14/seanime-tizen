@@ -1,6 +1,7 @@
 import type { AnimeEntry, LibraryCollection, MediaContainer, WatchHistory, WatchHistoryItem } from "../domain/types"
 import { createMediaToken } from "./auth"
 import { storage, type ClientIdentity, type ServerConfig } from "../lib/storage"
+import { diagnostic } from "../platform/diagnostics"
 
 interface SeaEnvelope<T> { data?: T; error?: string }
 
@@ -32,11 +33,14 @@ export class SeanimeClient {
   }
 
   async request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
+    const started = performance.now()
+    diagnostic("api.request", { endpoint, method: init.method ?? "GET" })
     const response = await fetch(`${normalizeUrl(this.config.url)}${endpoint}`, {
       ...init,
       headers: { ...this.headers(), ...(init.headers ?? {}) },
     })
     this.captureIdentity(response.headers)
+    diagnostic("api.response", { endpoint, status: response.status, milliseconds: Math.round(performance.now() - started) }, response.ok ? "info" : "warn")
     const text = await response.text()
     let envelope: SeaEnvelope<T> = {}
     try { envelope = text ? JSON.parse(text) as SeaEnvelope<T> : {} } catch {
@@ -47,10 +51,13 @@ export class SeanimeClient {
   }
 
   async requestText(endpoint: string): Promise<string> {
+    const started = performance.now()
     const response = await fetch(`${normalizeUrl(this.config.url)}${endpoint}`, { headers: this.headers() })
     this.captureIdentity(response.headers)
     if (!response.ok) throw new SeanimeError(`Request failed (${response.status})`, response.status)
-    return response.text()
+    const text = await response.text()
+    diagnostic("api.text-response", { endpoint, status: response.status, bytes: text.length, milliseconds: Math.round(performance.now() - started) })
+    return text
   }
 
   async validate() {
@@ -79,7 +86,9 @@ export class SeanimeClient {
     const response = await fetch(`${normalizeUrl(this.config.url)}/api/v1/mediastream/att/${encodeURIComponent(name)}`, { headers: this.headers() })
     this.captureIdentity(response.headers)
     if (!response.ok) throw new SeanimeError(`Could not load subtitle font (${response.status})`, response.status)
-    return new Uint8Array(await response.arrayBuffer())
+    const data = new Uint8Array(await response.arrayBuffer())
+    diagnostic("subtitle.font", { name, bytes: data.byteLength })
+    return data
   }
 
   async measureMediaSpeed(url: string, sampleBytes = 4 * 1024 * 1024) {
